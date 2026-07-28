@@ -55,6 +55,55 @@ def test_state_matches_the_home_pose(built):
     assert torch.allclose(sa.joint_vel, torch.zeros_like(sa.joint_vel))
 
 
+def test_base_linear_and_angular_velocity_land_in_the_right_slots(built):
+    """At rest every velocity field reads zero, so swapping the linear and
+    angular slices would be completely invisible. Write distinct nonzero values
+    and check each lands where its NAME says it does.
+
+    MuJoCo free-joint convention: qvel[0:3] is linear velocity in the WORLD
+    frame, qvel[3:6] is angular velocity in the BODY frame.
+    """
+    model, data, info = built
+    qpos = torch.tensor(data.qpos, dtype=torch.float32).unsqueeze(0)
+    qvel = torch.zeros(1, model.nv)
+    da = info.a.base_dofadr
+    qvel[0, da:da + 3] = torch.tensor([1.0, 2.0, 3.0])        # linear, world
+    qvel[0, da + 3:da + 6] = torch.tensor([4.0, 5.0, 6.0])    # angular, body
+
+    st = extract_state(qpos, qvel, info.a)
+    assert torch.allclose(st.base_linvel_world[0], torch.tensor([1.0, 2.0, 3.0]))
+    assert torch.allclose(st.base_angvel_local[0], torch.tensor([4.0, 5.0, 6.0]))
+
+
+def test_joint_velocity_is_read_from_the_joint_dofs_not_the_base(built):
+    """A wrong dof offset would pull base velocity into the joint block."""
+    model, data, info = built
+    qpos = torch.tensor(data.qpos, dtype=torch.float32).unsqueeze(0)
+    qvel = torch.zeros(1, model.nv)
+    jd = torch.as_tensor(info.a.joint_dofadr, dtype=torch.long)
+    expected = torch.arange(1, len(jd) + 1, dtype=torch.float32)
+    qvel[0, jd] = expected
+
+    st = extract_state(qpos, qvel, info.a)
+    assert torch.allclose(st.joint_vel[0], expected)
+    assert torch.allclose(st.base_linvel_world, torch.zeros(1, 3))
+    assert torch.allclose(st.base_angvel_local, torch.zeros(1, 3))
+
+
+def test_each_side_reads_its_own_joints(built):
+    """Both robots share a home pose, so comparing against home cannot catch a
+    side-swap in the joint indices. Perturb only side A and check B is untouched."""
+    model, data, info = built
+    qpos = torch.tensor(data.qpos, dtype=torch.float32).unsqueeze(0)
+    qvel = torch.zeros(1, model.nv)
+    qpos[0, torch.as_tensor(info.a.joint_qposadr, dtype=torch.long)] += 0.5
+
+    sa, sb = extract_duel_state(qpos, qvel, info)
+    assert not torch.allclose(sa.joint_pos, sb.joint_pos)
+    assert torch.allclose(
+        sb.joint_pos[0], torch.tensor(info.b.robot.home_joint_qpos), atol=1e-5)
+
+
 def test_extract_state_is_batched(built):
     _, data, info = built
     qpos, qvel = _tensors(data)
