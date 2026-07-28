@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# uv
+# (uv.lock IS committed — reproducible envs)
+
+# Internal scaffolding (design/plan docs, agent guidance) — not repo deliverables
+docs/superpowers/
+CLAUDE.md
+
+# Training / experiment outputs
+outputs/
+examples/outputs/
+checkpoints/*.pt
+wandb/
+*.log
+
+# Rendered scene screenshots & videos
+renders/
+videos/
+*.mp4
+results/
