@@ -25,3 +25,6 @@ renders/
 videos/
 *.mp4
 results/
+
+# MuJoCo runtime warning log (written to cwd on attach conflicts, EGL, etc.)
+MUJOCO_LOG.TXT
