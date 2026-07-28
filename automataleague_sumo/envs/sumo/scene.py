@@ -86,32 +86,57 @@ def _add_dohyo(spec: mujoco.MjSpec, cfg: SumoConfig) -> None:
     The band is two stacked flat decal cylinders: a full-radius bright disc with a
     slightly smaller clay disc on top of it, leaving a bright annulus at the rim.
     Decals are contact free (``contype=0``), so they are purely visual.
+
+    All three geoms share an explicit low-specular, low-shininess material. The
+    clay dohyo is a matte surface; it has nothing to gain from a specular
+    highlight, and MuJoCo's material defaults (specular=0.5, shininess=0.5) turn
+    the overhead key light into a glossy hotspot that reads as a blown-out disc
+    from the near-vertical top camera. Geom ``rgba`` still wins for color; the
+    material only supplies the low-gloss shading parameters.
     """
     h = cfg.platform_height
+    mat = spec.add_material()
+    mat.name = "clay"
+    mat.specular = 0.02
+    mat.shininess = 0.02
+    mat.reflectance = 0.0
     spec.worldbody.add_geom(
         name="dohyo", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-        size=[cfg.ring_radius, h / 2.0], pos=[0.0, 0.0, h / 2.0], rgba=_CLAY,
+        size=[cfg.ring_radius, h / 2.0], pos=[0.0, 0.0, h / 2.0],
+        rgba=_CLAY, material="clay",
     )
     spec.worldbody.add_geom(
         name="ring_band", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
         size=[cfg.ring_radius, _PAINT_HALF_Z], pos=[0.0, 0.0, h + _PAINT_HALF_Z],
-        rgba=_BAND, contype=0, conaffinity=0,
+        rgba=_BAND, material="clay", contype=0, conaffinity=0,
     )
     spec.worldbody.add_geom(
         name="ring_inner", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
         size=[cfg.ring_radius - cfg.band_width, _PAINT_HALF_Z],
-        pos=[0.0, 0.0, h + 3 * _PAINT_HALF_Z], rgba=_CLAY, contype=0, conaffinity=0,
+        pos=[0.0, 0.0, h + 3 * _PAINT_HALF_Z], rgba=_CLAY, material="clay",
+        contype=0, conaffinity=0,
     )
 
 
 def _add_lights(spec: mujoco.MjSpec, cfg: SumoConfig) -> None:
+    """Key + fill lights, both off the vertical axis and both non-specular.
+
+    The key light used to sit directly overhead (``pos=[0,0,4], dir=[0,0,-1]``),
+    which put its specular lobe squarely on the top camera's line of sight
+    (``elevation=-89``, i.e. looking almost straight up the light's boresight)
+    and blew the platform out to near-white in that view. Moving it off-axis,
+    and zeroing specular on both lights (the clay/floor materials are matte and
+    don't need a highlight), fixes that without dimming the corner/side views,
+    which are lit primarily by diffuse, not specular.
+    """
     spec.worldbody.add_light(
-        pos=[0.0, 0.0, 4.0], dir=[0, 0, -1],
-        diffuse=[0.8, 0.8, 0.8], specular=[0.2, 0.2, 0.2], castshadow=True,
+        pos=[1.4 * cfg.ring_radius, -1.8 * cfg.ring_radius, 3.5],
+        dir=[-0.55, 0.7, -1.35],
+        diffuse=[0.8, 0.8, 0.8], specular=[0.0, 0.0, 0.0], castshadow=True,
     )
     spec.worldbody.add_light(
         pos=[0.0, 2.5 * cfg.ring_radius, 3.0], dir=[0, -0.6, -1],
-        diffuse=[0.35, 0.35, 0.35], castshadow=False,
+        diffuse=[0.35, 0.35, 0.35], specular=[0.0, 0.0, 0.0], castshadow=False,
     )
 
 

@@ -1,6 +1,14 @@
 """Render preview stills of the sumo arena. Phase A design-review tool.
 
-    MUJOCO_GL=egl uv run python tools/render_scene.py --settle 300
+    MUJOCO_GL=egl uv run python tools/render_scene.py
+
+``--settle`` defaults to 0: the render shows exactly ``home_qpos``, the pose an
+episode actually resets to. A nonzero ``--settle`` instead runs that many
+passive physics steps first, which is useful for checking solver stability but
+is not a design preview — the G1's PD-held stance pitches forward well past a
+"slight crouch" over a few hundred steps of unlearned balance, since standing
+is what curriculum level 0 is for, not something the home pose guarantees on
+its own.
 """
 
 from __future__ import annotations
@@ -21,8 +29,12 @@ def main() -> None:
     p.add_argument("--robot", default="g1")
     p.add_argument("--opponent", default=None, help="defaults to --robot")
     p.add_argument("--ring-radius", type=float, default=SumoConfig().ring_radius)
-    p.add_argument("--settle", type=int, default=300,
-                   help="physics steps to run before rendering, so the pose is real")
+    p.add_argument(
+        "--settle", type=int, default=0,
+        help="physics steps to run before rendering. 0 (default) renders the "
+             "exact spawn pose (home_qpos) the env resets to; a nonzero value "
+             "shows passive settling instead, for checking solver stability",
+    )
     p.add_argument("--out", default="renders/arena")
     args = p.parse_args()
 
