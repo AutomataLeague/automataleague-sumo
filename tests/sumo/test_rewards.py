@@ -36,8 +36,43 @@ def _reward(own, opp, prev_opp_r=None, own_lost=False, opp_lost=False,
 
 
 def test_components_sum_to_the_total():
+    """Structural check only. `compute_reward` builds its total by summing the
+    very dict it returns, so this cannot fail for any implementation following
+    that pattern. It guards against a future refactor that computes the total
+    separately and lets the two drift. The real value pinning is in
+    `test_every_shaping_term_matches_its_configured_weight` below."""
     total, comps = _reward(_state(-0.5, 0.0), _state(0.5, 0.0, math.pi))
     assert torch.allclose(sum(comps.values()), total, atol=1e-6)
+
+
+def test_every_shaping_term_matches_its_configured_weight():
+    """Pin each term to a value derived independently from its config field.
+
+    Sign and ordering tests cannot catch a coefficient SWAP between two terms
+    that share a sign: `rc.action` (0.01) and `rc.joint_vel` (0.001) are both
+    positive penalties, as are `rc.center` (0.5) and `rc.engage` (0.3). Swap
+    either pair and every other test in this file still passes. Nor is `alive`
+    pinned anywhere else: the `shaping_scale=0` test forces it to zero, which is
+    trivially true of any scaled term regardless of its magnitude.
+    """
+    rc = RewardConfig()
+    own = _state(-0.75, 0.0, yaw=0.0, joint_vel=0.5)   # r_own = 0.75 = R/2
+    opp = _state(0.9, 0.0, math.pi)                    # r_opp = 0.9
+    action = torch.ones(1, N)
+
+    total, c = _reward(own, opp, prev_opp_r=torch.tensor([0.6]), action=action, rc=rc)
+
+    dist = 1.65                                        # 0.9 - (-0.75)
+    assert c["win"].item() == pytest.approx(0.0)
+    assert c["centre"].item() == pytest.approx(-rc.center * 0.5 ** 2, abs=1e-6)
+    assert c["push"].item() == pytest.approx(rc.push * (0.9 - 0.6) / RING, abs=1e-6)
+    # own faces +x and the opponent is straight ahead, so alignment is exactly 1.
+    assert c["engage"].item() == pytest.approx(
+        rc.engage * math.exp(-dist / rc.engage_range), abs=1e-6)
+    assert c["alive"].item() == pytest.approx(rc.alive, abs=1e-9)
+    assert c["action"].item() == pytest.approx(-rc.action * 1.0, abs=1e-9)
+    assert c["joint_vel"].item() == pytest.approx(-rc.joint_vel * 0.25, abs=1e-9)
+    assert total.item() == pytest.approx(sum(v.item() for v in c.values()), abs=1e-6)
 
 
 def test_win_term_is_strictly_zero_sum():
