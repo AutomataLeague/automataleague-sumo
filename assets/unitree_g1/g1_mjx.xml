@@ -11,23 +11,7 @@
         <geom group="2" type="mesh" density="0" material="silver"/>
       </default>
       <default class="collision">
-        <!-- automataleague: upstream disables all contacts for this class (see
-             note below) and re-enables specific pairs in its own scene_mjx.xml,
-             which we do not vendor (Task 2 removes scene*.xml — it wraps the
-             robot in its own floor). We need this robot to collide with an
-             arbitrary external world (arena floor, and later a second robot
-             instance) without the curated internal pair list, so this class
-             overrides contype/conaffinity/condim back to normal automatic
-             collision — but conaffinity=1 (not 2) deliberately means this
-             robot's own collision geoms do not test against each other
-             (contype=2 & conaffinity=1 is 0 both ways for two geoms from the
-             same instance), avoiding spurious contacts from adjacent-limb
-             collision proxies that overlap at rest (e.g. pelvis vs hip). They
-             still test against any default geom (contype=1, conaffinity=1,
-             MuJoCo's default) such as a plain ground plane. Self-collision and
-             inter-robot collision are scene-composition concerns for a later
-             task, not this one. -->
-        <geom group="3" rgba=".2 .6 .2 .3" type="capsule" contype="2" conaffinity="1" condim="3"/>
+        <geom group="3" rgba=".2 .6 .2 .3" type="capsule"/>
         <default class="foot_box">
           <geom pos="0.04 0 -0.029" size="0.09 0.03 0.008" type="box" group="4"/>
         </default>
@@ -36,27 +20,12 @@
         </default>
       </default>
       <site group="5" rgba="1 0 0 1"/>
-      <!-- Disable all contacts by default (visual meshes etc.); the "collision"
-           class above overrides this back on for physical collision proxies. -->
+      <!-- Disable all contacts and use explicit contact pairs. -->
       <geom condim="1" contype="0" conaffinity="0"/>
       <joint frictionloss="0.1" solimplimit="0 0.99 0.01" solreflimit=".008 1"/>
       <position inheritrange="1" kp="75" kv="2"/>
 
-      <!-- automataleague: upstream's own kp=75 (hip/knee) and kp=20 (ankle) are
-           tuned assuming an active balance policy (or scene_mjx.xml's crouched
-           "home" keyframe) is driving the joints; a bare position PD hold of
-           the straight-legged "stand" pose is an unactuated inverted pendulum
-           at the free (pelvis) joint, and it topples after ~1.5-2s regardless
-           of home-pose choice (verified independent of timestep and of the
-           collision fix above). We raise leg-joint kp 4x so the standing
-           baseline survives passively; actuatorfrcrange (real torque limits)
-           is untouched, so applied torque still can't exceed the physical
-           actuator's rated capacity — this only stiffens the low-amplitude
-           tracking response, which is what an active controller would give
-           for free. See RobotSpec docstring: action_scale is provisional and
-           refined in Phase C anyway. -->
       <default class="hip">
-        <position kp="300" kv="2"/>
         <default class="hip_pitch">
           <joint axis="0 1 0" range="-2.5307 2.8798" actuatorfrcrange="-88 88" armature="0.01017752004"/>
         </default>
@@ -68,11 +37,10 @@
         </default>
       </default>
       <default class="knee">
-        <position kp="300" kv="2"/>
         <joint axis="0 1 0" range="-0.087267 2.8798" actuatorfrcrange="-139 139" armature="0.025101925"/>
       </default>
       <default class="ankle">
-        <position kp="80" kv="2"/>
+        <position kp="20" kv="2"/>
         <default class="ankle_pitch">
           <joint axis="0 1 0" range="-0.87267 0.5236" actuatorfrcrange="-50 50" armature="0.00721945"/>
         </default>

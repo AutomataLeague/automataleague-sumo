@@ -16,6 +16,10 @@ from dataclasses import dataclass, field
 import mujoco
 import numpy as np
 
+# MuJoCo geom groups used for collision proxies in Menagerie models: 3 is the
+# convention for collision capsules, 4 for the box feet in the MJX variants.
+_COLLISION_GROUPS = (3, 4)
+
 
 @dataclass
 class RobotSpec:
@@ -85,5 +89,29 @@ class RobotSpec:
 
     # --- model loading ------------------------------------------------------
     def load_spec(self) -> mujoco.MjSpec:
-        """Load the robot as an editable ``MjSpec`` for scene composition."""
-        return mujoco.MjSpec.from_file(self.mjcf_path)
+        """Load the robot as an editable ``MjSpec``, with collision re-enabled.
+
+        Menagerie's MJX humanoid models disable contacts globally
+        (``contype=0 conaffinity=0`` on the robot's default class) and re-enable
+        exactly the foot-to-floor pairs in their own ``scene_mjx.xml``. We do not
+        vendor that scene, because it brings its own floor and its pair list
+        names a ``floor`` geom that our arena does not have — and an explicit
+        pair list cannot express robot-against-robot contact at all, which is the
+        entire point of this task.
+
+        So we re-enable ordinary automatic collision on the collision geoms here,
+        programmatically, and leave the vendored XML byte-identical to upstream
+        so it stays diffable against future Menagerie releases. Visual geoms
+        (group 2) keep ``contype=0`` and stay non-colliding.
+
+        Self-collision between adjacent links is handled by MuJoCo's automatic
+        parent-child contact exclusion; the scene builder adds explicit
+        ``exclude`` pairs if any spurious self-contact shows up.
+        """
+        spec = mujoco.MjSpec.from_file(self.mjcf_path)
+        for geom in spec.geoms:
+            if geom.group in _COLLISION_GROUPS:
+                geom.contype = 1
+                geom.conaffinity = 1
+                geom.condim = 3
+        return spec

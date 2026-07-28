@@ -35,14 +35,19 @@ _JOINTS = (
     + [f"right_{j}_joint" for j in _ARM]
 )
 
-# From the g1.xml "stand" keyframe ctrl: legs and waist at zero, arms slightly
-# forward and out (shoulder_pitch 0.2, shoulder_roll ±0.2, elbow 1.28).
-_ARM_HOME = (0.2, 0.2, 0.0, 1.28, 0.0, 0.0, 0.0)
+# From the "home" keyframe of upstream's own scene_mjx.xml, which is the stance
+# this MJX model is built around. Do NOT use g1.xml's "stand" keyframe: that pose
+# has straight legs (all leg joints zero), which is a locked-knee inverted
+# pendulum with no ankle leverage. It topples in about 1.5 s under a passive
+# position hold, and no gain tuning fixes that honestly.
+#
+# Slightly bent: hip_pitch -0.1, knee 0.3, ankle_pitch -0.2 per leg.
+_LEG_HOME = (-0.1, 0.0, 0.0, 0.3, -0.2, 0.0)
 _HOME_QPOS = np.array(
-    [0.0] * 12                              # legs
-    + [0.0] * 3                             # waist
-    + list(_ARM_HOME)                       # left arm
-    + list((0.2, -0.2, 0.0, 1.28, 0.0, 0.0, 0.0)),  # right arm (roll mirrored)
+    list(_LEG_HOME) * 2                             # left leg, right leg
+    + [0.0] * 3                                     # waist
+    + [0.2, 0.2, 0.0, 1.28, 0.0, 0.0, 0.0]          # left arm
+    + [0.2, -0.2, 0.0, 1.28, 0.0, 0.0, 0.0],        # right arm (roll mirrored)
     dtype=np.float32,
 )
 
@@ -56,7 +61,7 @@ def make_g1() -> RobotSpec:
         name="g1",
         mjcf_path=_G1_XML,
         base_body="pelvis",
-        nominal_height=0.79,     # pelvis height in the "stand" keyframe
+        nominal_height=0.784,    # pelvis height in the MJX "home" keyframe
         joint_names=list(_JOINTS),
         actuator_names=list(_JOINTS),   # actuators share joint names in g1_mjx.xml
         home_joint_qpos=_HOME_QPOS,
