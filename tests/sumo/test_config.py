@@ -28,6 +28,21 @@ def test_reset_noise_cannot_push_a_spawn_outside_the_ring():
     assert cfg.spawn_radius + cfg.pos_noise < cfg.ring_radius
 
 
+def test_reset_noise_that_reaches_the_rim_is_rejected():
+    """The invariant this module exists to protect: a robot must never be able to
+    spawn already outside the ring. Assert the guard actually raises, not merely
+    that the defaults happen to satisfy it."""
+    with pytest.raises(ValueError, match="reaches the rim"):
+        SumoConfig(pos_noise=1.0)          # 0.9 + 1.0 > 1.5
+
+
+def test_the_rim_guard_rejects_the_exact_boundary():
+    """spawn_radius 0.9 + pos_noise 0.6 == ring_radius 1.5 exactly. The guard is
+    `>=`, so landing precisely on the rim is already out."""
+    with pytest.raises(ValueError, match="reaches the rim"):
+        SumoConfig(pos_noise=0.6)
+
+
 @pytest.mark.parametrize("field,value", [
     ("ring_radius", 0.0),
     ("platform_height", -0.1),
