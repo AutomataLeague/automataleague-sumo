@@ -1,0 +1,65 @@
+"""Unitree G1 — first humanoid in the sumo league.
+
+Model vendored from MuJoCo Menagerie (``unitree_g1``). We load ``g1_mjx.xml``,
+not ``g1.xml``: the MJX variant replaces mesh colliders with capsules, spheres
+and box feet, which is what makes two humanoids in sustained contact tractable
+under MuJoCo-Warp. Both backends load this same file so that CPU evaluation and
+GPU training cannot disagree about the physics.
+
+29 position-controlled joints: 12 leg, 3 waist, 14 arm. The arms are actuated
+and matter here — shoving is done with them.
+
+See ``assets/unitree_g1/LICENSE`` for attribution.
+"""
+
+from __future__ import annotations
+
+import os
+
+import numpy as np
+
+from automataleague_sumo.robots.base import RobotSpec
+
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_G1_XML = os.path.join(_ROOT, "assets", "unitree_g1", "g1_mjx.xml")
+
+# Canonical joint order == actuator order in g1_mjx.xml.
+_LEG = ["hip_pitch", "hip_roll", "hip_yaw", "knee", "ankle_pitch", "ankle_roll"]
+_ARM = ["shoulder_pitch", "shoulder_roll", "shoulder_yaw", "elbow",
+        "wrist_roll", "wrist_pitch", "wrist_yaw"]
+_JOINTS = (
+    [f"left_{j}_joint" for j in _LEG]
+    + [f"right_{j}_joint" for j in _LEG]
+    + ["waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint"]
+    + [f"left_{j}_joint" for j in _ARM]
+    + [f"right_{j}_joint" for j in _ARM]
+)
+
+# From the g1.xml "stand" keyframe ctrl: legs and waist at zero, arms slightly
+# forward and out (shoulder_pitch 0.2, shoulder_roll ±0.2, elbow 1.28).
+_ARM_HOME = (0.2, 0.2, 0.0, 1.28, 0.0, 0.0, 0.0)
+_HOME_QPOS = np.array(
+    [0.0] * 12                              # legs
+    + [0.0] * 3                             # waist
+    + list(_ARM_HOME)                       # left arm
+    + list((0.2, -0.2, 0.0, 1.28, 0.0, 0.0, 0.0)),  # right arm (roll mirrored)
+    dtype=np.float32,
+)
+
+# Geoms allowed to touch the ground. Everything else touching means "down".
+_FEET = [f"{side}_foot{tag}_collision"
+         for side in ("left", "right") for tag in ("_box", "1", "2", "3")]
+
+
+def make_g1() -> RobotSpec:
+    return RobotSpec(
+        name="g1",
+        mjcf_path=_G1_XML,
+        base_body="pelvis",
+        nominal_height=0.79,     # pelvis height in the "stand" keyframe
+        joint_names=list(_JOINTS),
+        actuator_names=list(_JOINTS),   # actuators share joint names in g1_mjx.xml
+        home_joint_qpos=_HOME_QPOS,
+        action_scale=0.5,        # provisional; refined by tools/measure_reach.py in Phase C
+        foot_geoms=list(_FEET),
+    )
