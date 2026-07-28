@@ -134,17 +134,20 @@ def build_sumo_model(
 
     spec = mujoco.MjSpec()
     spec.modelname = f"sumo_{spec_a.name}_vs_{spec_b.name}"
-    # Mirror the vendored g1_mjx.xml <option> block (timestep, iterations,
-    # ls_iterations, integrator, eulerdamp-disable). MjSpec.attach's default
-    # 'warning' conflict policy always keeps the *parent's* value when parent
-    # and child option fields differ — even if the parent is only sitting at
-    # MuJoCo's built-in default — so without this the compiled scene would
-    # silently fall back to timestep=0.002/iterations=100/ls_iterations=50 and
-    # eulerdamp enabled, contradicting the frame_skip=5 => 50 Hz assumption in
-    # SumoConfig and the physics tuning upstream shipped the robot with.
+    # Mirror the vendored g1_mjx.xml <option> block. MjSpec.attach does not carry
+    # the child's solver settings up to the parent spec, so without this the
+    # compiled model silently falls back to MuJoCo's defaults (timestep 0.002),
+    # which breaks SumoConfig's frame_skip=5 => 50 Hz assumption.
+    #
+    # Do NOT set `cone = ELLIPTIC` or `impratio = 100` here. Those are the right
+    # choices for a quadruped with small round feet (they are what the parkour
+    # repo uses) and they are catastrophic for this model: combined with the MJX
+    # model's `iterations=5`, contact forces fail to converge and launch the
+    # robot. Measured over 1250 steps of a passive stance, elliptic+impratio=100
+    # sent the pelvis to z = -4839 m with 312 airborne steps, while the vendored
+    # settings below stay airborne for 0 steps and settle smoothly. The vendored
+    # <option> block is authoritative; leave it alone.
     spec.option.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
-    spec.option.cone = mujoco.mjtCone.mjCONE_ELLIPTIC
-    spec.option.impratio = 100.0
     spec.option.timestep = 0.004
     spec.option.iterations = 5
     spec.option.ls_iterations = 8

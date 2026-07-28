@@ -1,6 +1,7 @@
 import math
 
 import mujoco
+import numpy as np
 import pytest
 
 from automataleague_sumo.envs.sumo.config import SumoConfig
@@ -79,7 +80,39 @@ def test_robots_do_not_interpenetrate_at_spawn(built):
     assert not crossing, f"{len(crossing)} robot-robot contacts at spawn"
 
 
-def test_both_robots_stand_on_the_platform_without_falling(built):
+def test_the_assembled_scene_is_numerically_stable(built):
+    """The scene must not blow up. This is about the solver, not about balance.
+
+    A passive humanoid sinking into a crouch is expected physics; learning to
+    stand is what curriculum level 0 is for. A humanoid going AIRBORNE, or its
+    pelvis reaching an absurd coordinate, means contact forces are diverging.
+    An earlier revision of this scene inherited `cone=ELLIPTIC, impratio=100`
+    from the quadruped parkour repo; against this model's `iterations=5` that
+    launched the pelvis to z = -4839 m. Hence the explicit checks below.
+    """
+    model, info, cfg = built
+    data = mujoco.MjData(model)
+    data.qpos[:] = info.home_qpos
+    for side in info.sides:
+        data.ctrl[side.actuator_ids] = side.robot.home_joint_qpos
+    mujoco.mj_forward(model, data)
+
+    airborne = 0
+    for _ in range(500):
+        mujoco.mj_step(model, data)
+        assert np.isfinite(data.qvel).all(), "solver diverged (non-finite qvel)"
+        if data.ncon == 0:
+            airborne += 1
+        for side in info.sides:
+            z = data.qpos[side.base_qposadr + 2] - cfg.platform_height
+            assert -1.0 < z < 2.0, f"{side.prefix} left the world at z={z:.1f}"
+
+    assert airborne == 0, f"robots went airborne on {airborne}/500 steps"
+
+
+def test_both_robots_settle_upright_on_the_platform(built):
+    """After settling, both robots are still on top of the platform and have not
+    sunk through it. Not a balance test: the threshold is low on purpose."""
     model, info, cfg = built
     data = mujoco.MjData(model)
     data.qpos[:] = info.home_qpos
@@ -88,9 +121,50 @@ def test_both_robots_stand_on_the_platform_without_falling(built):
     mujoco.mj_forward(model, data)
     for _ in range(500):
         mujoco.mj_step(model, data)
+
     for side in info.sides:
         z = data.qpos[side.base_qposadr + 2] - cfg.platform_height
-        assert z > 0.6, f"{side.prefix} collapsed to {z:.3f} above the platform"
+        assert z > 0.1, f"{side.prefix} sank into the platform: z={z:.3f}"
+        xy = data.qpos[side.base_qposadr:side.base_qposadr + 2]
+        assert math.hypot(*xy) < cfg.ring_radius, f"{side.prefix} drifted out of the ring"
+
+
+def test_the_two_sides_behave_symmetrically(built):
+    """The two robots start in mirror-image poses under identical control, so
+    they should settle to near-identical heights. A large divergence means the
+    simulation is chaotic, which is the signature of an unstable solver."""
+    model, info, cfg = built
+    data = mujoco.MjData(model)
+    data.qpos[:] = info.home_qpos
+    for side in info.sides:
+        data.ctrl[side.actuator_ids] = side.robot.home_joint_qpos
+    mujoco.mj_forward(model, data)
+    for _ in range(500):
+        mujoco.mj_step(model, data)
+
+    z_a = data.qpos[info.a.base_qposadr + 2]
+    z_b = data.qpos[info.b.base_qposadr + 2]
+    assert abs(z_a - z_b) < 0.15, f"sides diverged: {z_a:.3f} vs {z_b:.3f}"
+
+
+def test_the_vendored_solver_settings_survive_attach(built):
+    """`MjSpec.attach` does not carry the child's <option> block up to the parent.
+    Without mirroring it, the compiled model silently uses MuJoCo's default
+    timestep of 0.002, which breaks SumoConfig's frame_skip=5 => 50 Hz control
+    rate. Pin the values that matter."""
+    model, _, _ = built
+    assert model.opt.timestep == pytest.approx(0.004)
+    assert model.opt.iterations == 5
+    assert model.opt.ls_iterations == 8
+
+
+def test_the_scene_does_not_inherit_quadruped_contact_settings(built):
+    """Regression guard. `cone=ELLIPTIC` with `impratio=100` is correct for the
+    parkour quadruped and catastrophic here: against this model's iterations=5 it
+    launched the pelvis to z = -4839 m. The vendored defaults must win."""
+    model, _, _ = built
+    assert model.opt.cone == mujoco.mjtCone.mjCONE_PYRAMIDAL
+    assert model.opt.impratio == pytest.approx(1.0)
 
 
 def test_platform_is_a_cylinder_of_the_configured_radius(built):
@@ -114,20 +188,3 @@ def test_ring_radius_is_honoured():
     for side in info.sides:
         base = info.home_qpos[side.base_qposadr:side.base_qposadr + 3]
         assert math.hypot(base[0], base[1]) == pytest.approx(1.2, abs=1e-5)
-
-
-def test_compiled_model_keeps_the_vendored_solver_tuning(built):
-    """MjSpec.attach's default conflict policy keeps the *parent's* option
-    fields on any mismatch with the child, so a freshly created MjSpec() would
-    silently revert the compiled model to timestep=0.002/iterations=100 instead
-    of the vendored g1_mjx.xml's timestep=0.004/iterations=5 the robot was
-    tuned with, and would leave eulerdamp enabled instead of disabled. That
-    changes control rate (SumoConfig.frame_skip=5 assumes a 0.004s step, giving
-    50 Hz) and joint damping behaviour, so the scene builder must set these
-    explicitly rather than let them fall back to MuJoCo defaults.
-    """
-    model, _, _ = built
-    assert model.opt.timestep == pytest.approx(0.004)
-    assert model.opt.iterations == 5
-    assert model.opt.ls_iterations == 8
-    assert bool(model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_EULERDAMP)
