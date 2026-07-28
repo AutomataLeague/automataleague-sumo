@@ -83,4 +83,9 @@ def compute_termination(
 
     terminated = lost_a | lost_b
     truncated = (step_count >= tc.max_episode_steps) & ~terminated
+    # A timeout ends the duel with nobody put out, which is a draw. Without this
+    # the outcome code would stay ONGOING on the final step and could not
+    # describe how the duel ended on its own; every consumer would have to
+    # inspect `truncated` separately to tell a draw from a duel still running.
+    outcome = torch.where(truncated, const(DRAW), outcome)
     return terminated, truncated, lost_a, lost_b, outcome

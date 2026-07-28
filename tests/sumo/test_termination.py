@@ -1,3 +1,4 @@
+import dataclasses
 import math
 
 import torch
@@ -118,13 +119,63 @@ def test_an_untouched_duel_is_ongoing():
     assert outcome.item() == ONGOING
 
 
-def test_timeout_truncates_without_terminating():
+def test_timeout_truncates_and_is_recorded_as_a_draw():
+    """A timeout ends the duel with nobody put out. `outcome` must say DRAW, so
+    that it describes the ending on its own rather than requiring every consumer
+    to cross-check `truncated`."""
     terminated, truncated, _, _, outcome = compute_termination(
         _state(x=-0.5), _state(x=0.5), G1, G1,
         torch.tensor([TC.max_episode_steps]), CFG, TC)
     assert not terminated.item()
     assert truncated.item()
-    assert outcome.item() == ONGOING
+    assert outcome.item() == DRAW
+
+
+def test_a_loss_on_the_final_step_terminates_rather_than_truncates():
+    """Pins the `& ~terminated` guard. Without it a duel decided on the very last
+    step would report BOTH terminated and truncated, and would be recorded as a
+    draw instead of a win."""
+    terminated, truncated, _, _, outcome = compute_termination(
+        _state(), _state(x=CFG.ring_radius + 0.1), G1, G1,
+        torch.tensor([TC.max_episode_steps]), CFG, TC)
+    assert terminated.item()
+    assert not truncated.item(), "a decided duel must not also report truncation"
+    assert outcome.item() == A_WINS
+
+
+def test_the_rim_belongs_to_the_ring():
+    """Pins the ring-out comparison as `>` and not `>=`. Standing exactly on the
+    radius is still inside; only beyond it is out."""
+    on_rim, _ = side_lost(_state(x=CFG.ring_radius), G1, CFG, TC)
+    assert not on_rim.item(), "standing exactly on the rim should still be in"
+    beyond, code = side_lost(_state(x=CFG.ring_radius + 1e-4), G1, CFG, TC)
+    assert beyond.item()
+    assert code.item() == LOSS_RING_OUT
+
+
+def test_the_down_threshold_scales_with_each_robots_own_height():
+    """A taller robot is down at a height a shorter one is fine at. Without this,
+    nothing would catch `side_lost` ignoring its `robot` argument."""
+    tall = dataclasses.replace(G1, name="tall", nominal_height=1.2)
+    st = _state(z=CFG.platform_height + 0.5)          # 0.5 m above the platform
+    lost_g1, _ = side_lost(st, G1, CFG, TC)           # 0.5 > 0.55*0.784 = 0.431
+    lost_tall, code = side_lost(st, tall, CFG, TC)    # 0.5 < 0.55*1.2  = 0.66
+    assert not lost_g1.item()
+    assert lost_tall.item()
+    assert code.item() == LOSS_DOWN
+
+
+def test_compute_termination_judges_each_side_by_its_own_robot():
+    """Both sides at the same height, but only the taller robot is down. If the
+    implementation used `robot_a` for both, this would come out a draw."""
+    tall = dataclasses.replace(G1, name="tall", nominal_height=1.2)
+    z = CFG.platform_height + 0.5
+    _, _, lost_a, lost_b, outcome = compute_termination(
+        _state(z=z), _state(z=z), tall, G1,
+        torch.zeros(1, dtype=torch.long), CFG, TC)
+    assert lost_a.item()
+    assert not lost_b.item()
+    assert outcome.item() == B_WINS
 
 
 def test_termination_is_batched():
