@@ -1,0 +1,121 @@
+"""Environment registry — named, versioned task environments.
+
+An ENV is a registry id (``"sumo-1"``) mapped to an ``EnvSpec``: a default
+``SumoConfig`` factory over the shared ``envs/sumo`` engine, plus season metadata
+and the per-level curriculum schedule. Users import an env by id:
+
+    from automataleague_sumo import make_env, list_environments
+    env = make_env("sumo-1", robot="g1", level=0, backend="cpu")
+
+Add a future season by adding one ``EnvSpec`` entry; the engine is shared.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, fields
+
+from automataleague_sumo.envs.sumo.config import (
+    RewardConfig,
+    SumoConfig,
+    TerminationConfig,
+)
+
+
+@dataclass(frozen=True)
+class EnvSpec:
+    env_id: str
+    season: int
+    description: str
+    ring_radius: float
+    n_levels: int                                # difficulty levels 0..n_levels-1
+    action_scale_by_level: tuple[float, ...]     # q-target scale (radians)
+    shaping_scale_by_level: tuple[float, ...]    # anneals the shaping terms away
+    opponent_by_level: tuple[str, ...]           # see config.OPPONENT_MODES
+
+    def config(self, level: int, **overrides) -> SumoConfig:
+        """Default ``SumoConfig`` for this env at ``level``, before hydra overrides."""
+        if not 0 <= level < self.n_levels:
+            raise ValueError(
+                f"{self.env_id}: level {level} out of range 0..{self.n_levels - 1}")
+        known = {f.name for f in fields(SumoConfig)}
+        for k in overrides:
+            if k not in known:
+                raise ValueError(f"Unknown SumoConfig field '{k}'")
+        defaults = dict(
+            ring_radius=self.ring_radius,
+            level=level,
+            opponent=self.opponent_by_level[level],
+            shaping_scale=self.shaping_scale_by_level[level],
+            action_scale=self.action_scale_by_level[level],
+        )
+        # Construct once with the overrides merged in, so SumoConfig.__post_init__
+        # validates the final combination rather than the pre-override one.
+        return SumoConfig(**{**defaults, **overrides})
+
+
+ENVIRONMENTS: dict[str, EnvSpec] = {
+    "sumo-1": EnvSpec(
+        env_id="sumo-1",
+        season=0,
+        description=(
+            "Season 0 — raised circular dohyo, two humanoids, 5 curriculum levels "
+            "from balance to league self-play."),
+        ring_radius=1.5,
+        n_levels=5,
+        # Provisional and uniform. tools/measure_reach.py sets the real schedule in
+        # Phase C by measuring step length and push impulse against action_scale.
+        # The parkour lesson is that this number must be measured with margin over
+        # what the task demands, never guessed.
+        action_scale_by_level=(0.5, 0.5, 0.5, 0.5, 0.5),
+        # L0 balance, L1 push a dummy, L2 beat a frozen L1 snapshot, L3 naive
+        # self-play, L4 league play against a checkpoint pool.
+        shaping_scale_by_level=(1.0, 1.0, 0.7, 0.4, 0.2),
+        opponent_by_level=("zero", "zero", "frozen", "self", "pool"),
+    ),
+}
+
+
+def get_env_spec(env_id: str) -> EnvSpec:
+    if env_id not in ENVIRONMENTS:
+        raise ValueError(
+            f"Unknown environment '{env_id}'. Registered: {sorted(ENVIRONMENTS)}")
+    return ENVIRONMENTS[env_id]
+
+
+def list_environments(season: int | None = None) -> list[EnvSpec]:
+    specs = list(ENVIRONMENTS.values())
+    if season is not None:
+        specs = [s for s in specs if s.season == season]
+    return sorted(specs, key=lambda s: (s.season, s.env_id))
+
+
+def make_env(
+    env_id: str,
+    robot: str = "g1",
+    opponent_robot: str | None = None,
+    level: int | None = None,
+    backend: str = "cpu",
+    num_envs: int | None = None,
+    reward_cfg: RewardConfig | None = None,
+    term_cfg: TerminationConfig | None = None,
+    **cfg_overrides,
+):
+    """Instantiate a registered env.
+
+    backend: ``"cpu"`` (one duel, renderable) or ``"warp"`` (GPU, batched — Phase C).
+    ``opponent_robot`` defaults to ``robot``, the symmetric self-play case.
+    """
+    spec = get_env_spec(env_id)
+    lvl = spec.n_levels - 1 if level is None else int(level)
+    cfg = spec.config(lvl, **cfg_overrides)
+
+    if backend == "cpu":
+        from automataleague_sumo.envs.sumo.sumo_cpu import SumoEnvCPU
+
+        return SumoEnvCPU(robot=robot, opponent_robot=opponent_robot, cfg=cfg,
+                          reward_cfg=reward_cfg, term_cfg=term_cfg)
+    if backend == "warp":
+        raise NotImplementedError(
+            "The batched MuJoCo-Warp backend arrives in Phase C. "
+            "Use backend='cpu' for a single renderable duel.")
+    raise ValueError(f"Unknown backend '{backend}' (use 'cpu' or 'warp')")
