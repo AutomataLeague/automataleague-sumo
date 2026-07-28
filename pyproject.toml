@@ -27,6 +27,12 @@ train = [
 ]
 # GPU-parallel physics (Phase C) — source pinned per machine on the GPU box.
 gpu = ["mujoco-warp"]
+
+# Dev tooling lives in [dependency-groups] (PEP 735), not optional-dependencies,
+# so a bare `uv sync` installs it. `uv sync --extra ...` alone would NOT install
+# an optional-dependencies group, leaving a fresh clone unable to run its own
+# README-documented `uv run pytest`.
+[dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.8"]
 
 [build-system]

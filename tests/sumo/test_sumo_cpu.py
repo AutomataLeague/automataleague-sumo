@@ -1,3 +1,4 @@
+import dataclasses
 import math
 
 import numpy as np
@@ -6,6 +7,7 @@ import pytest
 from automataleague_sumo.envs.sumo.config import SumoConfig, TerminationConfig
 from automataleague_sumo.envs.sumo.sumo_cpu import SumoEnvCPU
 from automataleague_sumo.envs.sumo.termination import A_WINS, B_WINS, DRAW, ONGOING
+from automataleague_sumo.robots import get_robot
 
 
 @pytest.fixture(scope="module")
@@ -175,6 +177,17 @@ def test_reward_components_sum_to_the_reported_reward(env):
     env.reset(seed=0)
     _, (rew_a, _), _, _, info = env.step(_zero(env), _zero(env))
     assert sum(info["reward_components_a"].values()) == pytest.approx(rew_a, abs=1e-5)
+
+
+def test_cross_robot_matchup_fails_loudly_until_phase_c():
+    """action_scale, observation_dim and action_dim are all derived from side A's
+    robot alone. A second robot with a different action scale or joint count would
+    silently produce a wrong-scale duel rather than an error, so a mismatched pair
+    must be rejected up front instead of allowed to run quietly wrong."""
+    g1 = get_robot("g1")
+    other = dataclasses.replace(g1, name="g1-clone")
+    with pytest.raises(NotImplementedError, match="Phase C"):
+        SumoEnvCPU("g1", opponent_robot=other)
 
 
 def test_render_produces_an_image(env):

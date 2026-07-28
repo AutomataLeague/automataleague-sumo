@@ -46,10 +46,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
 gpu = [
     { name = "mujoco-warp" },
 ]
@@ -62,6 +58,12 @@ train = [
     { name = "wandb" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "hydra-core", marker = "extra == 'train'", specifier = ">=1.3" },
@@ -71,15 +73,19 @@ requires-dist = [
     { name = "mujoco", specifier = ">=3.4.0" },
     { name = "mujoco-warp", marker = "extra == 'gpu'" },
     { name = "numpy", specifier = ">=1.24" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "tensordict", marker = "extra == 'train'", specifier = ">=0.6" },
     { name = "torch", specifier = ">=2.4" },
     { name = "torchrl", marker = "extra == 'train'", specifier = ">=0.6" },
     { name = "tqdm", marker = "extra == 'train'", specifier = ">=4.66" },
     { name = "wandb", marker = "extra == 'train'", specifier = ">=0.18" },
 ]
-provides-extras = ["train", "gpu", "dev"]
+provides-extras = ["train", "gpu"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "ruff", specifier = ">=0.8" },
+]
 
 [[package]]
 name = "certifi"

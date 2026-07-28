@@ -3,7 +3,10 @@
 Runs the shared task logic at batch size 1. Used for local validation, for
 rendering, and for head-to-head evaluation of two checkpoints. The batched
 MuJoCo-Warp backend used for training arrives in Phase C and consumes exactly the
-same task logic modules.
+same task logic modules at batch N, where N is the number of parallel WORLDS —
+each world containing BOTH robots of one duel. Only the stacked policy view over
+both sides is batch 2N; a Phase C implementer who puts one robot per world would
+build 2N single-robot worlds whose robots never collide.
 
 The API is duel level: ``step`` takes both actions. Wrapping this as a
 single-agent env with a frozen opponent belongs with the self-play machinery.
@@ -42,6 +45,15 @@ class SumoEnvCPU:
         self.reward_cfg = reward_cfg or RewardConfig()
         self.term_cfg = term_cfg or TerminationConfig()
         self.model, self.scene = build_sumo_model(robot, opponent_robot, self.cfg)
+        if self.scene.a.robot.name != self.scene.b.robot.name:
+            raise NotImplementedError(
+                f"SumoEnvCPU currently assumes both sides share a robot "
+                f"(got a={self.scene.a.robot.name!r}, b={self.scene.b.robot.name!r}). "
+                f"action_scale, observation_dim and action_dim are all derived from "
+                f"side A's robot, so a cross-robot matchup with a different action "
+                f"scale or joint count would silently produce a wrong-scale duel. "
+                f"Per-side handling arrives with Phase C."
+            )
         self.data = mujoco.MjData(self.model)
 
         self.action_scale = (

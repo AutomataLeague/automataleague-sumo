@@ -108,3 +108,11 @@ def test_warp_backend_fails_loudly_until_phase_c():
 def test_unknown_backend_raises():
     with pytest.raises(ValueError, match="Unknown backend"):
         make_env("sumo-1", backend="quantum")
+
+
+def test_num_envs_on_cpu_backend_raises_instead_of_being_ignored():
+    """The CPU backend is a single renderable duel. Silently ignoring num_envs
+    would let `num_envs=2048, backend="cpu"` quietly hand back one duel instead
+    of failing loudly like the warp backend does when it isn't ready."""
+    with pytest.raises(ValueError, match="Phase C"):
+        make_env("sumo-1", backend="cpu", num_envs=2048)

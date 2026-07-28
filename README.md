@@ -64,7 +64,11 @@ than proxies like hugging the centre. Only the terminal win term is zero sum.
 ## Robots
 
 Robots are pluggable through `RobotSpec`. Observation and action widths derive
-from joint count, so a new robot is a new `RobotSpec` and nothing else.
+from joint count, so adding a robot mostly means writing a new `RobotSpec`. The
+CPU env currently assumes both sides share a robot (`sumo_cpu.py` reads
+`scene.a.robot` for `action_scale`, `observation_dim` and `action_dim`), so a
+second robot with a different action scale or joint count needs that handled
+too before a cross-robot matchup works.
 
 | Robot | Joints | Notes |
 | --- | --- | --- |
@@ -78,8 +82,11 @@ backends must share one model so CPU evaluation cannot disagree with GPU trainin
 
 ```bash
 MUJOCO_GL=egl uv run pytest          # CPU suite
-uv run pytest -m gpu                 # requires CUDA + mujoco-warp
 ```
+
+Phase C will add a `gpu`-marked suite (requires CUDA + mujoco-warp, run with
+`uv run pytest -m gpu`); no test carries that marker yet, so there is nothing to
+run against it today.
 
 ## Status
 

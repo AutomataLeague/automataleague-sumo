@@ -8,6 +8,7 @@ they cannot drift apart.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 # How the opponent side is driven. Only "zero" is implemented in Phase B; the
@@ -68,10 +69,20 @@ class SumoConfig:
             raise ValueError(
                 f"Unknown opponent mode '{self.opponent}'. Valid: {list(OPPONENT_MODES)}"
             )
-        if self.spawn_radius + self.pos_noise >= self.ring_radius:
+        for name in ("pos_noise", "yaw_noise", "joint_noise"):
+            value = getattr(self, name)
+            if value < 0:
+                raise ValueError(f"{name} must be >= 0, got {value}")
+        # pos_noise is applied independently on x and y (see sumo_cpu.py's
+        # _apply_reset_noise), so the true worst-case spawn radius is the corner of
+        # a pos_noise x pos_noise square offset outward from spawn_radius along one
+        # axis, not the one-dimensional sum of the two budgets.
+        worst_case = math.hypot(self.spawn_radius + self.pos_noise, self.pos_noise)
+        if worst_case >= self.ring_radius:
             raise ValueError(
                 f"spawn_radius {self.spawn_radius:.2f} + pos_noise {self.pos_noise:.2f} "
-                f"reaches the rim at {self.ring_radius:.2f} — a robot could spawn out"
+                f"(applied per-axis) reaches the rim at {self.ring_radius:.2f}: "
+                f"worst-case spawn radius is {worst_case:.3f} — a robot could spawn out"
             )
 
     @property

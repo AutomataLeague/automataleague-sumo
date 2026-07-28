@@ -104,12 +104,21 @@ def make_env(
 
     backend: ``"cpu"`` (one duel, renderable) or ``"warp"`` (GPU, batched — Phase C).
     ``opponent_robot`` defaults to ``robot``, the symmetric self-play case.
+    ``num_envs`` only has meaning for ``backend="warp"``; the CPU backend is a
+    single renderable duel and rejects any explicit ``num_envs`` rather than
+    silently ignoring it.
     """
     spec = get_env_spec(env_id)
     lvl = spec.n_levels - 1 if level is None else int(level)
     cfg = spec.config(lvl, **cfg_overrides)
 
     if backend == "cpu":
+        if num_envs is not None:
+            raise ValueError(
+                f"backend='cpu' is a single renderable duel and does not support "
+                f"num_envs (got {num_envs}). Batched execution arrives with the "
+                f"Warp backend in Phase C."
+            )
         from automataleague_sumo.envs.sumo.sumo_cpu import SumoEnvCPU
 
         return SumoEnvCPU(robot=robot, opponent_robot=opponent_robot, cfg=cfg,
