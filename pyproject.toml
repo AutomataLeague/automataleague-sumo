@@ -1,0 +1,49 @@
+[project]
+name = "automataleague-sumo"
+version = "0.1.0"
+description = "Two humanoid robots wrestle to push each other out of a circle, in MuJoCo, trained with TorchRL."
+requires-python = ">=3.10"
+
+# Core. Torch is core (not an extra) because the task logic is written in tensors
+# and the CPU test suite exercises it without any training dependency.
+dependencies = [
+    "mujoco>=3.4.0",
+    "numpy>=1.24",
+    "torch>=2.4",
+    "imageio>=2.34",
+    "imageio-ffmpeg>=0.5",
+]
+
+[project.optional-dependencies]
+# Training stack (Phase C) — install on the GPU box: `uv sync --extra train`
+train = [
+    "torchrl>=0.6",
+    "tensordict>=0.6",
+    "hydra-core>=1.3",
+    "wandb>=0.18",
+    "tqdm>=4.66",
+    "moviepy>=1.0",
+]
+# GPU-parallel physics (Phase C) — source pinned per machine on the GPU box.
+gpu = ["mujoco-warp"]
+dev = ["pytest>=8.0", "ruff>=0.8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["automataleague_sumo"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gpu: requires a CUDA device + mujoco-warp (run on the spark/jetson)",
+]
