@@ -3,8 +3,7 @@
 import numpy as np
 import pytest
 
-from automataleague_sumo import make_env
-from automataleague_sumo.envs.sumo.termination import A_WINS, B_WINS, DRAW, ONGOING
+from automataleague_sumo import A_WINS, B_WINS, DRAW, ONGOING, make_env
 
 
 def test_a_random_duel_runs_to_a_conclusion():
@@ -24,9 +23,24 @@ def test_a_random_duel_runs_to_a_conclusion():
         if terminated or truncated:
             break
 
-    # Flailing humanoids fall over; the duel must resolve, not run forever.
-    assert terminated or truncated
-    assert outcome in (ONGOING, A_WINS, B_WINS, DRAW)
+    # `terminated`, not merely `terminated or truncated`. The loop runs exactly
+    # max_episode_steps iterations and `truncated` is guaranteed true on the last
+    # one, so the weaker assertion would pass even if loss detection were
+    # completely broken. Flailing humanoids go down within a couple of seconds,
+    # far inside the 750-step budget, so a duel that runs the clock out means
+    # `side_lost` is not working.
+    assert terminated, "the duel ran the clock out; loss detection is not firing"
+    assert not truncated
+    assert outcome in (A_WINS, B_WINS, DRAW)
+
+
+def test_outcome_codes_are_part_of_the_public_api():
+    """A consumer reading `info["outcome"]` must be able to interpret it without
+    importing from an internal module."""
+    import automataleague_sumo as als
+
+    assert {"ONGOING", "A_WINS", "B_WINS", "DRAW"} <= set(als.__all__)
+    assert len({als.ONGOING, als.A_WINS, als.B_WINS, als.DRAW}) == 4
 
 
 def test_the_two_sides_see_the_same_world_from_opposite_perspectives():
