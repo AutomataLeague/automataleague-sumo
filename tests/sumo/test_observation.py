@@ -88,8 +88,14 @@ def test_observation_is_invariant_to_rotating_the_whole_world(pair, theta):
 
 def test_mirrored_configurations_produce_identical_observations(pair):
     """If B is exactly A rotated by pi about the ring centre, both sides must see
-    the same thing. This is the invariant that makes one shared self-play policy
-    valid for both sides."""
+    the same thing.
+
+    Note for the reader: this is a COROLLARY of the rotation-invariance test at
+    theta = pi, not an independent check. Since R_pi is an involution,
+    obs_b = f(R_pi a, R_pi(R_pi a)) collapses to f(a, R_pi a) = obs_a for any
+    rotation-invariant f. It is kept because it states the shared-policy claim in
+    the form a reader cares about, but the claim is actually carried by the
+    rotation test plus the concrete-value tests below."""
     _, _, prev_action, home, contact = pair
     a = _make_state(-0.9, 0.2, 0.3, seed=7)
     b = _rotate_state(a, math.pi)
@@ -116,6 +122,64 @@ def test_relative_position_block_points_at_the_opponent(pair):
     rel_pos = obs[0, start:start + 3]
     assert rel_pos[0].item() == pytest.approx(1.8, abs=1e-4)
     assert rel_pos[1].item() == pytest.approx(0.0, abs=1e-4)
+
+
+def test_relative_position_uses_the_full_3d_base_frame_not_just_yaw(pair):
+    """With a pitched base the opponent's relative position must be expressed in
+    the true 3D body frame.
+
+    A yaw-only approximation agrees with the correct transform whenever the robot
+    is upright, and diverges the moment it leans — which in sumo is most of the
+    time. Rotation invariance can never catch this: a yaw-only implementation is
+    still invariant under a world z rotation, because the yaw and the world
+    vector rotate together and cancel. Only a value test with a tilted base
+    distinguishes them.
+    """
+    _, _, prev_action, home, contact = pair
+    pitch = math.radians(30.0)
+    own = _make_state(0.0, 0.0, 0.0, seed=11)
+    # Pitch the base 30 degrees about its own y axis.
+    own.base_pos = torch.tensor([[0.0, 0.0, 1.0]])
+    own.base_quat = torch.tensor(
+        [[math.cos(pitch / 2), 0.0, math.sin(pitch / 2), 0.0]])
+    opp = _make_state(1.0, 0.0, math.pi, seed=12)
+    opp.base_pos = torch.tensor([[1.0, 0.0, 1.0]])   # one metre straight ahead
+
+    obs = _obs(own, opp, prev_action, home, contact)
+    start = 9 + 3 * N_JOINTS + 4
+    rel_pos = obs[0, start:start + 3]
+    # R(q)^T applied to the world offset (1,0,0) with q = pitch about y gives
+    # (cos p, 0, sin p). A yaw-only transform would return (1, 0, 0).
+    assert rel_pos[0].item() == pytest.approx(math.cos(pitch), abs=1e-5)
+    assert rel_pos[1].item() == pytest.approx(0.0, abs=1e-5)
+    assert rel_pos[2].item() == pytest.approx(math.sin(pitch), abs=1e-5)
+
+
+def test_proprioception_block_carries_its_values(pair):
+    """Pin the proprioceptive slots by value.
+
+    Rotation invariance can never guard `projected_gravity`: gravity lies on the
+    rotation axis, so that block is invariant for free and a rotation test would
+    pass even if it were zeroed. The joint_vel and prev_action slots are likewise
+    unguarded unless they hold DISTINCT nonzero values, otherwise a swap between
+    them is invisible.
+    """
+    _, opp, _, home, contact = pair
+    own = _make_state(-0.5, 0.0, 0.0, seed=13)
+    own.base_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]])          # upright
+    own.base_angvel_local = torch.tensor([[0.1, 0.2, 0.3]])
+    own.joint_pos = home.clone().unsqueeze(0) + 0.25
+    own.joint_vel = torch.full((1, N_JOINTS), 0.5)
+    prev_action = torch.full((1, N_JOINTS), -0.75)                # distinct value
+
+    obs = _obs(own, opp, prev_action, home, contact)
+    n = N_JOINTS
+    assert torch.allclose(obs[0, 3:6], torch.tensor([0.1, 0.2, 0.3]), atol=1e-5)
+    # Upright base: projected gravity points straight down in the body frame.
+    assert torch.allclose(obs[0, 6:9], torch.tensor([0.0, 0.0, -1.0]), atol=1e-5)
+    assert torch.allclose(obs[0, 9:9 + n], torch.full((n,), 0.25), atol=1e-5)
+    assert torch.allclose(obs[0, 9 + n:9 + 2 * n], torch.full((n,), 0.5), atol=1e-5)
+    assert torch.allclose(obs[0, 9 + 2 * n:9 + 3 * n], torch.full((n,), -0.75), atol=1e-5)
 
 
 def test_ring_block_reports_normalized_radius_and_edge_distance(pair):
