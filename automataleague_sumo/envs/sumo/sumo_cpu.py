@@ -111,6 +111,26 @@ class SumoEnvCPU:
                 self.data.qpos[side.joint_qposadr] += self._rng.normal(
                     0.0, cfg.joint_noise, size=side.robot.n_joints)
 
+    def _maybe_push(self) -> None:
+        """Shove both bases in a random horizontal direction, on schedule.
+
+        Must match the Warp backend exactly, or an evaluation would be measuring a
+        policy under disturbances it never trained against — the same class of
+        mismatch that a zero-noise reset creates. See SumoConfig.push_speed.
+        """
+        cfg = self.cfg
+        if cfg.push_interval_steps <= 0:
+            return
+        step = int(self.step_count.item())
+        if step == 0 or step % cfg.push_interval_steps != 0:
+            return
+        for side in self.scene.sides:
+            theta = self._rng.uniform(0.0, 2.0 * np.pi)
+            speed = self._rng.uniform(0.0, cfg.push_speed)
+            da = side.base_dofadr
+            self.data.qvel[da:da + 2] += speed * np.array(
+                [np.cos(theta), np.sin(theta)])
+
     # --- gym-ish API --------------------------------------------------------
     def reset(self, seed: int | None = None):
         if seed is not None:
@@ -140,6 +160,7 @@ class SumoEnvCPU:
                 side.robot.home_joint_qpos + self.action_scale * act)
             actions[key] = torch.tensor(act, dtype=torch.float32).unsqueeze(0)
 
+        self._maybe_push()
         for _ in range(self.cfg.frame_skip):
             mujoco.mj_step(self.model, self.data)
         self.step_count += 1

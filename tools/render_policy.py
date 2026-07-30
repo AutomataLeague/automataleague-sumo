@@ -37,6 +37,11 @@ def parse_args():
     p.add_argument("--camera", default="corner")
     p.add_argument("--fps", type=int, default=50)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--both-sides", action="store_true",
+                   help="drive BOTH robots with this policy, even at a level whose "
+                        "opponent is normally a dummy. The observation carries no "
+                        "side identity, so a policy trained on side A should work "
+                        "unchanged on side B — this is how to check that it does.")
     p.add_argument("--stochastic", action="store_true",
                    help="sample actions instead of taking the mean. Training used "
                         "sampling, so a deterministic rollout is a different policy "
@@ -70,7 +75,7 @@ def main():
                 setattr(target, key, type(getattr(target, key))(value))
 
     env = SumoEnvCPU(robot=cfg.env.robot, cfg=sumo_cfg, reward_cfg=rc, term_cfg=tc)
-    both_sides = sumo_cfg.opponent == "self"
+    both_sides = args.both_sides or sumo_cfg.opponent == "self"
     mode = ExplorationType.RANDOM if args.stochastic else ExplorationType.DETERMINISTIC
 
     frames, summaries = [], []
@@ -94,7 +99,8 @@ def main():
                 if term or trunc:
                     break
         summaries.append((ep, steps, outcome))
-        print(f"  episode {ep}: {steps} steps, outcome code {outcome}")
+        print(f"  episode {ep}: {steps} steps, duel outcome code {outcome} "
+              f"(0 ongoing, 1 A wins, 2 B wins, 3 draw)")
 
     imageio.mimsave(args.out, frames, fps=args.fps)
     mean_steps = sum(s for _, s, _ in summaries) / len(summaries)

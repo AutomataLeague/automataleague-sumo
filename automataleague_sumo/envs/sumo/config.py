@@ -62,6 +62,20 @@ class SumoConfig:
     # --- control rate: model timestep is 0.004 s, so frame_skip 5 => 50 Hz ---
     frame_skip: int = 5
 
+    # --- push perturbations ---
+    # Random horizontal impulses on each robot's base, unobserved, applied every
+    # `push_interval_steps` control steps with a magnitude drawn from
+    # U(0, push_speed) in m/s and a uniformly random heading.
+    #
+    # Without them a balance level has no disturbance in it at all: the opponent
+    # never makes contact, and the only variation inside an episode comes from the
+    # reset. The cheapest solution is then one fixed stance, and that is what gets
+    # learned. Measured on the first level 0 policy, which held its pose for a full
+    # 750-step episode: a 0.5 m/s shove toppled it in 6 of 6 seeds within 57 steps.
+    # Both are 0 by default so a level opts in.
+    push_interval_steps: int = 0
+    push_speed: float = 0.0
+
     # --- reset noise. Both backends reset with noise. A zero-noise reset makes
     # evaluation out of distribution relative to training, which in the parkour
     # work produced deterministic evals that disagreed with real performance. ---
@@ -96,7 +110,23 @@ class SumoConfig:
                 f"dummy. A duel where one side plays by different rules is not the game "
                 f"being evaluated — use opponent_loses_by='any' outside the dummy levels."
             )
-        for name in ("pos_noise", "yaw_noise", "joint_noise"):
+        if self.push_interval_steps < 0:
+            raise ValueError(
+                f"push_interval_steps must be >= 0, got {self.push_interval_steps}")
+        # Checked before the half-configured test below, so a negative magnitude
+        # reports what is actually wrong with it rather than being described as a
+        # missing schedule.
+        if self.push_speed < 0:
+            raise ValueError(f"push_speed must be >= 0, got {self.push_speed}")
+        if (self.push_interval_steps > 0) != (self.push_speed > 0):
+            raise ValueError(
+                f"push perturbations are half-configured: push_interval_steps="
+                f"{self.push_interval_steps}, push_speed={self.push_speed}. Either "
+                f"both are positive or both are zero — a schedule with no magnitude "
+                f"and a magnitude with no schedule are both silently no-ops, which "
+                f"would look exactly like push training that is switched on."
+            )
+        for name in ("pos_noise", "yaw_noise", "joint_noise", "push_speed"):
             value = getattr(self, name)
             if value < 0:
                 raise ValueError(f"{name} must be >= 0, got {value}")

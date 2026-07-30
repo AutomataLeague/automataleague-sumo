@@ -26,6 +26,8 @@ contestants at once.
 
 from __future__ import annotations
 
+import math
+
 import mujoco_warp as mjw
 import torch
 import warp as wp
@@ -142,6 +144,7 @@ class SumoEnvWarp(EnvBase):
             self._joint_qadr[key] = torch.as_tensor(
                 side.joint_qposadr, dtype=torch.long, device=d)
             self._base_qadr[key] = int(side.base_qposadr)
+        self._base_dofadr = {k: int(s.base_dofadr) for k, s in self._sides.items()}
 
     def _setup_contact_lookup(self) -> None:
         """Per-geom side tag plus the buffers for the batched A-touches-B test.
@@ -227,6 +230,35 @@ class SumoEnvWarp(EnvBase):
         flag.index_put_((worldid.clamp_(0, self._num_worlds - 1),),
                         cross.to(flag.dtype), accumulate=True)
         return (flag > 0).to(torch.float32)
+
+    def _maybe_push(self) -> None:
+        """Shove both bases in a random horizontal direction, on schedule.
+
+        Applied to ``qvel`` before the physics burst rather than as a force, so the
+        magnitude reads directly in m/s and is comparable to ``tools/push_test.py``.
+        Deliberately absent from the observation: a disturbance the policy can see
+        coming is a control input, not a disturbance, and would let it pre-brace
+        instead of learning to recover.
+        """
+        cfg = self.cfg
+        if cfg.push_interval_steps <= 0:
+            return
+        due = (self.step_count > 0) & (self.step_count % cfg.push_interval_steps == 0)
+        if not bool(due.any()):
+            return
+        qvel = wp.to_torch(self._mjw_data.qvel)
+        N, d = self._num_worlds, self._device
+        for key in ("a", "b"):
+            adr = self._base_dofadr[key]
+            # Independent heading and magnitude per robot: a shared impulse would
+            # push both the same way, which is a moving reference frame rather than
+            # a disturbance to either.
+            theta = torch.rand(N, device=d) * (2.0 * math.pi)
+            speed = torch.rand(N, device=d) * cfg.push_speed
+            delta = torch.stack([speed * torch.cos(theta),
+                                 speed * torch.sin(theta)], dim=-1)
+            qvel[:, adr:adr + 2] += torch.where(
+                due.unsqueeze(-1), delta, torch.zeros_like(delta))
 
     def _write_ctrl(self, act_a: torch.Tensor, act_b: torch.Tensor) -> None:
         ctrl = wp.to_torch(self._mjw_data.ctrl)              # [N, nu]
@@ -338,6 +370,7 @@ class SumoEnvWarp(EnvBase):
             act_a = actions
             act_b = torch.zeros_like(act_a)
         self._write_ctrl(act_a, act_b)
+        self._maybe_push()
 
         wp.capture_launch(self._graph)
         wp.synchronize()

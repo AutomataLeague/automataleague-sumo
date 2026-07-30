@@ -32,6 +32,8 @@ class EnvSpec:
     shaping_scale_by_level: tuple[float, ...]    # anneals the shaping terms away
     opponent_by_level: tuple[str, ...]           # see config.OPPONENT_MODES
     opponent_loses_by_level: tuple[str, ...]     # see config.OPPONENT_LOSS_MODES
+    push_speed_by_level: tuple[float, ...]       # m/s, unobserved shove magnitude
+    push_interval_by_level: tuple[int, ...]      # control steps between shoves
 
     def config(self, level: int, **overrides) -> SumoConfig:
         """Default ``SumoConfig`` for this env at ``level``, before hydra overrides."""
@@ -47,6 +49,8 @@ class EnvSpec:
             level=level,
             opponent=self.opponent_by_level[level],
             opponent_loses_by=self.opponent_loses_by_level[level],
+            push_speed=self.push_speed_by_level[level],
+            push_interval_steps=self.push_interval_by_level[level],
             shaping_scale=self.shaping_scale_by_level[level],
             action_scale=self.action_scale_by_level[level],
         )
@@ -78,6 +82,13 @@ ENVIRONMENTS: dict[str, EnvSpec] = {
         # being put out (the task is purely pushing). From L2 the opponent is a
         # real policy and plays by the ordinary rules.
         opponent_loses_by_level=("none", "ring_out", "any", "any", "any"),
+        # Balance is only balance if something disturbs it. Level 0 with no
+        # perturbation taught a held pose: the resulting policy stood for a full
+        # 750-step episode and fell to a 0.5 m/s shove in 6 of 6 seeds. The
+        # fighting levels supply their own disturbance — an opponent — so the
+        # scripted shoves taper off rather than compounding with real contact.
+        push_speed_by_level=(1.0, 1.0, 0.5, 0.5, 0.5),
+        push_interval_by_level=(75, 75, 150, 150, 150),
     ),
 }
 
