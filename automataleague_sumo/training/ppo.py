@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 
@@ -56,6 +57,7 @@ def run_ppo(cfg, *, level, total_frames, init_ckpt=None, run_name="ppo",
         cfg.network.device or ("cuda:0" if torch.cuda.is_available() else "cpu"))
     checkpoint_dir = os.path.join(checkpoints_root, run_name)
     os.makedirs(checkpoint_dir, exist_ok=True)
+    metrics_path = os.path.join(checkpoint_dir, "metrics.jsonl")
 
     torch.manual_seed(cfg.env.seed)
     np.random.seed(cfg.env.seed)
@@ -204,6 +206,11 @@ def run_ppo(cfg, *, level, total_frames, init_ckpt=None, run_name="ppo",
 
         if logger is not None:
             log_metrics(logger, metrics, collected_frames)
+        # Always keep a local copy. The dashboard is the nice view, but a run whose
+        # metrics only exist in a remote service cannot be replotted or diffed
+        # against another run from the box that produced it.
+        with open(metrics_path, "a") as fh:
+            fh.write(json.dumps({"collected_frames": collected_frames, **metrics}) + "\n")
 
     _save(os.path.join(checkpoint_dir, "ppo_final.pt"),
           actor, critic, collected_frames, cfg, level)

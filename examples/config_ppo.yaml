@@ -4,6 +4,11 @@
 # means "keep whatever the registry's curriculum chose for this level", so a run
 # can change one knob without restating the whole schedule.
 
+# Which curriculum level ppo_sumo.py trains. Declared here rather than added on
+# the command line with `+level=`, so `level=2` works like every other override.
+level: 0
+init_checkpoint: null
+
 env:
   name: sumo-1
   robot: g1

@@ -159,11 +159,35 @@ def test_done_is_shared_by_both_rows_of_a_world(selfplay_env):
         td = env.reset(out.set("_reset", out["done"])) if bool(done.any()) else out
 
 
-def test_reset_clears_the_stale_contact_flag(selfplay_env):
-    """The contact arrays describe the step before the reset. Carrying that into a
-    fresh episode would tell a policy it is already in a clinch at spawn, when the
-    two spawns are a ring diameter apart."""
+def test_contact_flag_fires_on_a_clinch_and_is_cleared_by_reset(selfplay_env):
+    """Two assertions that only mean something together.
+
+    The robots spawn a ring diameter apart and collapse in place, so they never
+    actually touch during an ordinary rollout — asserting "contact is 0 after
+    reset" on its own would pass even with the contact flag hard-wired to zero,
+    and equally with the stale-flag clearing deleted. So this drives the two
+    robots into each other first, proves the flag can reach 1, and only then
+    checks that reset puts it back to 0.
+    """
+    import warp as wp
+
     env = selfplay_env
+    env.reset()
+
+    # Drop side B on top of side A so their geoms interpenetrate.
+    qpos, _ = env._state_tensors()
+    qa, qb = env._base_qadr["a"], env._base_qadr["b"]
+    qpos[:, qb:qb + 3] = qpos[:, qa:qa + 3]
+    zero = torch.zeros(env.num_worlds, env.action_spec.shape[-1], device=env.device)
+    env._write_ctrl(zero, zero)
+    wp.capture_launch(env._graph)
+    wp.synchronize()
+
+    clinch = env._contact_flag()
+    assert float(clinch.max()) == 1.0, (
+        "two interpenetrating robots produced no A-to-B contact — the flag is not "
+        "reading the contact arrays correctly")
+
+    # ...and after a reset that stale contact must not leak into the new episode.
     td = env.reset()
-    contact_col = td["observation"][:, -1]
-    assert float(contact_col.abs().max()) == 0.0
+    assert float(td["observation"][:, -1].abs().max()) == 0.0
