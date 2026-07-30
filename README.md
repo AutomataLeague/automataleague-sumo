@@ -146,6 +146,21 @@ and a full episode is 750, so success is a ten-fold improvement rather than a
 marginal one. The first run's curve rose the whole way to 66 steps and still sat
 *below* the do-nothing bar; without this table it read as steady progress.
 
+### Level 0 result
+
+With the override recipe above, 2048 duels, 40M frames, 33 minutes on a DGX
+Spark (GB10):
+
+| | do nothing | default reward, 10M | survival reward, 40M |
+| --- | --- | --- | --- |
+| episode length (eval) | 73.6 | 50.4 | **731.9** / 750 |
+| duels reaching the timeout | — | 0% | **96.9%** |
+
+Learning is a sharp transition between 15M and 22M frames, not a gradual climb:
+episode length sits near 100 until then and reaches the cap within 7M frames.
+Nothing before 15M distinguishes the successful run from the failed one on
+episode length alone, which is worth knowing before killing a run early.
+
 `tools/warp_smoke.py` checks the four things that are expensive to discover late:
 that the solver has not diverged, that contacts fit inside `nconmax` (MuJoCo-Warp
 silently *drops* contacts past the cap rather than raising), that the two sides
@@ -161,10 +176,12 @@ MUJOCO_GL=egl uv run pytest -m gpu       # + CUDA and mujoco-warp (spark/jetson)
 ## Status
 
 Phases A and B are complete: arena, task logic, CPU duel backend, registry.
-Phase C is underway: the batched MuJoCo-Warp backend, PPO, and curriculum levels
-0 and 1 are in. Still to come are the frozen-snapshot and pool opponents (levels
-2 and 4), `tools/measure_reach.py` for the action-scale schedule, and Phase D's
-Elo leaderboard.
+Phase C has the batched MuJoCo-Warp backend, the PPO stack, and **level 0
+solved** (731.9 of 750 steps). Level 1 is wired but untrained.
+
+Still to come: the frozen-snapshot and pool opponents (levels 2 and 4, which
+currently raise `NotImplementedError`), a measured `action_scale` schedule to
+replace the provisional uniform 0.5, and Phase D's Elo leaderboard.
 
 ## Licence
 
