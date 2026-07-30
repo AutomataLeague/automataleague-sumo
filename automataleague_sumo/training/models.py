@@ -22,6 +22,33 @@ def get_activation(name: str):
     return _ACTIVATIONS[name]
 
 
+def build_actor(cfg, robot, device):
+    """Rebuild the actor from a robot spec alone, with no live GPU env.
+
+    Rendering and head-to-head evaluation run on CPU, where constructing a Warp env
+    just to read two integers off its specs is not possible. Both widths are derived
+    from the same functions the real env uses, so a stub that disagreed with the
+    trained checkpoint would fail loudly at load_state_dict rather than quietly
+    producing a differently-shaped policy.
+    """
+    from torchrl.data import Bounded, Composite, Unbounded
+
+    from automataleague_sumo.envs.sumo.observation import observation_dim
+
+    obs_dim, act_dim = observation_dim(robot), robot.action_dim
+
+    class _Stub:
+        batch_size = torch.Size([1])
+        observation_spec = Composite(
+            observation=Unbounded(shape=(1, obs_dim), device=device), shape=(1,))
+        action_spec = Bounded(
+            low=-torch.ones(1, act_dim, device=device),
+            high=torch.ones(1, act_dim, device=device), device=device)
+
+    actor, _ = make_ppo_models(cfg, _Stub(), device)
+    return actor
+
+
 def make_ppo_models(cfg, train_env, device):
     """Actor (MLP -> TanhNormal ProbabilisticActor) and critic (MLP -> ValueOperator).
 

@@ -91,6 +91,12 @@ python tools/warp_smoke.py --num-envs 2048 --level 0
 # check the reward actually pays for what the level is asking
 python tools/reward_balance.py
 
+# find out what "doing nothing" scores, so a training curve can be judged
+python tools/baselines.py --level 0
+
+# watch what a checkpoint actually does
+python tools/render_policy.py checkpoints/sumo1_L0/ppo_best.pt -o duel.mp4
+
 # level 0 — see the override recipe below, the defaults do NOT work here
 python examples/ppo_sumo.py level=0 env.num_envs=2048 \
     env.reward_weights.alive=0.3 env.reward_weights.center=0.1 \
@@ -122,6 +128,23 @@ env.reward_weights.center=0.1    # was 0.5  -> break-even moves to 2.6 m, outsid
 env.reward_weights.push=0        # the dummy's radius is noise the learner cannot control
 env.reward_weights.engage=0      # likewise for facing a robot that is lying down
 ```
+
+### Judge level 0 against doing nothing, not against zero
+
+The G1 spawns in a stance it cannot passively hold, so it survives a while and
+falls over regardless of what drives it. `tools/baselines.py` measures the bar
+(sumo-1 level 0, 12 seeds):
+
+| policy | mean episode length |
+| --- | --- |
+| zero action | 73.6 steps |
+| small random, U(-0.2, 0.2) | 75.9 steps |
+| random, U(-1, 1) | 62.1 steps |
+
+**A level 0 policy has learned nothing about balance until it beats ~76 steps**,
+and a full episode is 750, so success is a ten-fold improvement rather than a
+marginal one. The first run's curve rose the whole way to 66 steps and still sat
+*below* the do-nothing bar; without this table it read as steady progress.
 
 `tools/warp_smoke.py` checks the four things that are expensive to discover late:
 that the solver has not diverged, that contacts fit inside `nconmax` (MuJoCo-Warp
