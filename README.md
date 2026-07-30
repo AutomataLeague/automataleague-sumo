@@ -88,11 +88,39 @@ contestants are ordinary policy rows.
 # validate and benchmark the backend before spending GPU hours
 python tools/warp_smoke.py --num-envs 2048 --level 0
 
-# one curriculum level
-python examples/ppo_sumo.py level=0
+# check the reward actually pays for what the level is asking
+python tools/reward_balance.py
+
+# level 0 — see the override recipe below, the defaults do NOT work here
+python examples/ppo_sumo.py level=0 env.num_envs=2048 \
+    env.reward_weights.alive=0.3 env.reward_weights.center=0.1 \
+    env.reward_weights.push=0 env.reward_weights.engage=0
 
 # the whole schedule, warm-starting each level from the last
 python examples/ppo_curriculum.py
+```
+
+### The level 0 reward, and why the defaults are wrong for it
+
+Run `tools/reward_balance.py` before training a level. With the shipped
+`RewardConfig`, the net per-step reward for simply staying alive at the 0.9 m
+spawn radius is **-0.130** guaranteed, **-0.080** even under the most generous
+reading of the `engage` term. Every extra step the robot survives at spawn costs
+it reward, and the break-even radius is 0.474 m, well inside where it starts.
+
+That is not a theoretical concern. Measured over the first 9M frames of level 0:
+the policy crept inward from 0.98 m to 0.34 m while its episode length sat at 60
+steps, and only began extending episodes (60 → 66) once it had crossed inside
+0.474 m. It optimized exactly what it was asked to.
+
+For a survival level, make survival unconditionally positive and drop the two
+terms that describe an opponent which is only scenery:
+
+```
+env.reward_weights.alive=0.3     # was 0.05
+env.reward_weights.center=0.1    # was 0.5  -> break-even moves to 2.6 m, outside the ring
+env.reward_weights.push=0        # the dummy's radius is noise the learner cannot control
+env.reward_weights.engage=0      # likewise for facing a robot that is lying down
 ```
 
 `tools/warp_smoke.py` checks the four things that are expensive to discover late:

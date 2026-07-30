@@ -10,12 +10,61 @@ that the final policy optimizes the actual win condition.
 
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import Tensor
 
 from automataleague_sumo.envs.sumo.config import RewardConfig
 from automataleague_sumo.envs.sumo.spatial import yaw_from_quat
 from automataleague_sumo.envs.sumo.state import RobotState
+
+
+def survival_margin(
+    rc: RewardConfig, ring_radius: float, radius: float, shaping_scale: float = 1.0,
+) -> float:
+    """Net shaping reward per step for simply staying alive at ``radius``.
+
+    This is the GUARANTEED floor, counting only the two terms paid every step no
+    matter what the robot or its opponent does: the alive bonus and the centre
+    penalty. ``push`` and ``engage`` depend on the opponent's motion and on
+    facing, and ``action``/``joint_vel`` are penalties a still robot drives toward
+    zero, so none of them belong in a floor.
+
+    Read the sign accordingly. Positive is a proof that one more step of survival
+    pays. Negative is a warning, not a proof of the opposite: ``engage`` can add
+    up to ``rc.engage`` per step on top, so the realised margin can still be
+    positive. On the first level 0 run the floor at the 0.9 m spawn radius was
+    -0.130 and the realised margin including a favourable ``engage`` was about
+    -0.080 — still negative, and the policy responded exactly as asked, creeping
+    inward from 0.98 m to 0.40 m while its episode length stayed pinned near 60
+    steps for four million frames.
+    """
+    centre = -rc.center * (radius / ring_radius) ** 2
+    return shaping_scale * (rc.alive + centre)
+
+
+def engage_ceiling(rc: RewardConfig, separation: float) -> float:
+    """Largest ``engage`` reward obtainable at a given separation, per step.
+
+    ``engage`` is ``rc.engage * alignment * exp(-separation / engage_range)`` and
+    alignment is at most 1, so this is that expression at perfect facing. Bounding
+    it by ``rc.engage`` alone ignores the decay and is far too generous to be
+    useful: at the 1.8 m spawn separation the decay costs a factor of six.
+    """
+    return rc.engage * math.exp(-separation / rc.engage_range)
+
+
+def break_even_radius(rc: RewardConfig, ring_radius: float) -> float:
+    """Radius where the centre penalty exactly cancels the alive bonus.
+
+    Inside it, surviving pays; outside it, dying sooner scores better. Compare
+    this against ``SumoConfig.spawn_radius``: if the spawn is outside, the level
+    is asking the policy to move before it asks it to survive.
+    """
+    if rc.center <= 0:
+        return float("inf")
+    return ring_radius * math.sqrt(rc.alive / rc.center)
 
 
 def compute_reward(
