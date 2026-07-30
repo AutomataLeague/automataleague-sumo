@@ -94,6 +94,9 @@ python tools/reward_balance.py
 # find out what "doing nothing" scores, so a training curve can be judged
 python tools/baselines.py --level 0
 
+# can the policy take a hit? a standing pose is not balance
+python tools/push_test.py checkpoints/sumo1_L0/ppo_best.pt
+
 # watch what a checkpoint actually does
 python tools/render_policy.py checkpoints/sumo1_L0/ppo_best.pt -o duel.mp4
 
@@ -160,6 +163,32 @@ Learning is a sharp transition between 15M and 22M frames, not a gradual climb:
 episode length sits near 100 until then and reaches the cap within 7M frames.
 Nothing before 15M distinguishes the successful run from the failed one on
 episode length alone, which is worth knowing before killing a run early.
+
+That policy also transfers to side B unchanged, which is the rotation-invariant
+observation doing its job: `tools/render_policy.py --both-sides` drives both
+robots from it and both stand for the full episode.
+
+### Surviving a full episode is not balance
+
+`tools/push_test.py` shoves the base partway through an episode and reports
+whether the robot recovers. The policy above, which never lost a duel:
+
+| shove | survived |
+| --- | --- |
+| 0.0 m/s | 6/6 |
+| 0.5 m/s | **0/6** (fell within 57 steps) |
+
+It had learned one fixed stance, which is the cheapest solution available when
+the opponent never makes contact and the only variation inside an episode comes
+from the reset. Nothing in the level 0 metrics could show this, because they all
+measure the situation the policy trained in.
+
+`SumoConfig.push_speed` / `push_interval_steps` add unobserved random horizontal
+impulses during training, scheduled per level by the registry (1.0 m/s every 75
+steps while balancing, tapering to 0.5 every 150 once a real opponent supplies
+its own disturbance). They are absent from the observation on purpose: a
+disturbance the policy can see coming is a control input, and lets it pre-brace
+rather than learn to recover.
 
 `tools/warp_smoke.py` checks the four things that are expensive to discover late:
 that the solver has not diverged, that contacts fit inside `nconmax` (MuJoCo-Warp
