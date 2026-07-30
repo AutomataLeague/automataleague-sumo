@@ -107,6 +107,11 @@ def main():
                         label=label if len(runs) == 1 else f"{label} ({runs[run_i][0]})")
                 drawn += 1
 
+        # Return is measured in whatever units that run's weights define, so two
+        # runs with different reward_weights cannot be compared on this panel. Say
+        # so on the chart rather than trusting the reader to remember.
+        if title == "Episode reward" and len(runs) > 1:
+            title += "  (not comparable across runs)"
         ax.set_title(title, fontsize=12, fontweight="bold", color=INK,
                      loc="left", pad=8)
         ax.set_ylabel(ylabel, fontsize=9, color=MUTED)
