@@ -100,9 +100,35 @@ def test_make_env_defaults_to_the_hardest_level():
     assert env.cfg.level == spec.n_levels - 1
 
 
-def test_warp_backend_fails_loudly_until_phase_c():
-    with pytest.raises(NotImplementedError, match="Phase C"):
-        make_env("sumo-1", backend="warp")
+def test_importing_the_registry_does_not_import_mujoco_warp():
+    """mujoco-warp is a GPU-only dependency. If the registry pulled it in at import
+    time, a CPU-only checkout could not so much as list the available environments.
+
+    Run in a fresh interpreter on purpose. Asserting on this process's sys.modules
+    would pass for the wrong reason in both directions: trivially where mujoco-warp
+    is not installed at all, and by accident of test ordering where it is.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import sys\n"
+         "from automataleague_sumo.envs import registry\n"
+         "registry.list_environments()\n"
+         "assert 'mujoco_warp' not in sys.modules, sorted(sys.modules)[:0] or 'imported'\n"
+         "print('clean')"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "clean" in result.stdout
+
+
+def test_cpu_backend_rejects_warp_only_backend_kwargs():
+    """backend_kwargs are the backend's own constructor arguments. Accepting and
+    ignoring them on CPU would let a typo'd Warp run silently execute one duel."""
+    with pytest.raises(ValueError, match="Warp-only"):
+        make_env("sumo-1", backend="cpu", backend_kwargs={"njmax": 600})
 
 
 def test_unknown_backend_raises():
@@ -113,6 +139,6 @@ def test_unknown_backend_raises():
 def test_num_envs_on_cpu_backend_raises_instead_of_being_ignored():
     """The CPU backend is a single renderable duel. Silently ignoring num_envs
     would let `num_envs=2048, backend="cpu"` quietly hand back one duel instead
-    of failing loudly like the warp backend does when it isn't ready."""
-    with pytest.raises(ValueError, match="Phase C"):
+    of the 2048 the caller asked for, and a benchmark would read 2048x too fast."""
+    with pytest.raises(ValueError, match="does not support"):
         make_env("sumo-1", backend="cpu", num_envs=2048)

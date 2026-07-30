@@ -78,21 +78,42 @@ We load `g1_mjx.xml`, the primitive-collider variant, not `g1.xml`. Two humanoid
 in sustained contact make mesh colliders prohibitive under MuJoCo-Warp, and both
 backends must share one model so CPU evaluation cannot disagree with GPU training.
 
+## Training
+
+The GPU backend steps `num_envs` parallel **duels**, each duel being one world
+holding both robots. Under self-play the policy batch is twice that, because both
+contestants are ordinary policy rows.
+
+```bash
+# validate and benchmark the backend before spending GPU hours
+python tools/warp_smoke.py --num-envs 2048 --level 0
+
+# one curriculum level
+python examples/ppo_sumo.py level=0
+
+# the whole schedule, warm-starting each level from the last
+python examples/ppo_curriculum.py
+```
+
+`tools/warp_smoke.py` checks the four things that are expensive to discover late:
+that the solver has not diverged, that contacts fit inside `nconmax` (MuJoCo-Warp
+silently *drops* contacts past the cap rather than raising), that the two sides
+are wired symmetrically, and what the throughput actually is.
+
 ## Tests
 
 ```bash
-MUJOCO_GL=egl uv run pytest          # CPU suite
+MUJOCO_GL=egl uv run pytest              # CPU suite
+MUJOCO_GL=egl uv run pytest -m gpu       # + CUDA and mujoco-warp (spark/jetson)
 ```
-
-Phase C will add a `gpu`-marked suite (requires CUDA + mujoco-warp, run with
-`uv run pytest -m gpu`); no test carries that marker yet, so there is nothing to
-run against it today.
 
 ## Status
 
 Phases A and B are complete: arena, task logic, CPU duel backend, registry.
-Phase C (batched MuJoCo-Warp backend, PPO, levels 0 and 1) and Phase D
-(self-play, Elo leaderboard) are next.
+Phase C is underway: the batched MuJoCo-Warp backend, PPO, and curriculum levels
+0 and 1 are in. Still to come are the frozen-snapshot and pool opponents (levels
+2 and 4), `tools/measure_reach.py` for the action-scale schedule, and Phase D's
+Elo leaderboard.
 
 ## Licence
 

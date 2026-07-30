@@ -1,0 +1,91 @@
+# PPO on sumo-1. Defaults are tuned for a DGX Spark (GB10, 122 GB unified memory).
+#
+# A yaml value of `null` under env.arena / env.reward_weights / env.termination
+# means "keep whatever the registry's curriculum chose for this level", so a run
+# can change one knob without restating the whole schedule.
+
+env:
+  name: sumo-1
+  robot: g1
+  num_envs: 2048          # parallel DUELS. Under self-play the policy batch is 2x this.
+  seed: 0
+  # Per-world MuJoCo-Warp buffers. Two humanoids in a clinch are far more
+  # contact-rich than the quadruped these numbers were first tuned for, and
+  # MuJoCo-Warp DROPS constraints past the cap instead of raising, so a too-small
+  # value shows up as a duel that mysteriously refuses to make contact.
+  # tools/warp_smoke.py reports the observed peak; keep headroom over it.
+  nconmax: 160
+  njmax: 600
+
+  arena:
+    ring_radius: null
+    platform_height: null
+    spawn_frac: null
+    opponent: null
+    opponent_loses_by: null
+    shaping_scale: null
+    action_scale: null
+    frame_skip: null
+    pos_noise: null
+    yaw_noise: null
+    joint_noise: null
+
+  reward_weights:
+    win: null
+    center: null
+    push: null
+    engage: null
+    engage_range: null
+    alive: null
+    action: null
+    joint_vel: null
+
+  termination:
+    fall_height_frac: null
+    max_tilt_deg: null
+    max_episode_steps: null
+
+collector:
+  frames_per_batch: 65536   # policy rows per PPO batch; rounded down to a whole
+                            # number of env steps against the real batch size.
+  total_frames: 20_000_000
+
+loss:
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  entropy_coeff: 0.005
+  critic_coeff: 0.5
+  loss_critic_type: l2
+  ppo_epochs: 4
+  mini_batch_size: 8192
+  max_grad_norm: 1.0
+  anneal_lr: true
+  anneal_clip_epsilon: true
+
+optim:
+  lr: 3.0e-4
+
+network:
+  device: cuda:0
+  activation: elu
+  hidden_sizes: [512, 256, 128]
+
+logger:
+  backend: wandb          # "" disables logging entirely
+  mode: online
+  project_name: automataleague-sumo
+  group_name: sumo-1
+  exp_name: sumo1
+  eval_iter: 1_000_000    # collected frames between evaluations
+  eval_envs: 64           # duels per evaluation
+  eval_steps: 750         # cap; equals one full episode at the default termination
+
+curriculum:
+  levels: [0, 1]
+  frames_per_level: [10_000_000, 20_000_000]
+  warm_start: true
+
+hydra:
+  job:
+    chdir: false

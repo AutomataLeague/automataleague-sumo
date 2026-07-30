@@ -15,6 +15,18 @@ from dataclasses import dataclass
 # rest are wired up with the self-play machinery in Phase C.
 OPPONENT_MODES: tuple[str, ...] = ("zero", "frozen", "self", "pool")
 
+# Which loss conditions count against side B. A zero-action dummy collapses on
+# its own in about 1.2 s (measured in Phase B: ~0.45 m of sag against a 0.431 m
+# fall threshold), so with the ordinary rules the learner is handed a free win
+# roughly 60 steps into every early-curriculum episode and never has to act.
+#   "none"     - side B cannot lose; only the learner's own loss ends the duel.
+#                Level 0 is then purely "stay upright and centred".
+#   "ring_out" - side B loses only by leaving the ring or the platform, which is
+#                exactly the level 1 task: put the dummy out. Its own collapse is
+#                ignored, so the learner has to actually push.
+#   "any"      - the ordinary rules: a real contestant that can also be put down.
+OPPONENT_LOSS_MODES: tuple[str, ...] = ("none", "ring_out", "any")
+
 
 @dataclass
 class SumoConfig:
@@ -34,6 +46,9 @@ class SumoConfig:
     # --- curriculum ---
     level: int = 0
     opponent: str = "zero"
+    # See OPPONENT_LOSS_MODES. Only meaningful while side B is a dummy; a real
+    # opponent must play by the ordinary rules, which __post_init__ enforces.
+    opponent_loses_by: str = "any"
     # Multiplies every shaping term (not the sparse win term), so the reward
     # anneals toward the true win condition as the curriculum advances.
     shaping_scale: float = 1.0
@@ -68,6 +83,18 @@ class SumoConfig:
         if self.opponent not in OPPONENT_MODES:
             raise ValueError(
                 f"Unknown opponent mode '{self.opponent}'. Valid: {list(OPPONENT_MODES)}"
+            )
+        if self.opponent_loses_by not in OPPONENT_LOSS_MODES:
+            raise ValueError(
+                f"Unknown opponent_loses_by mode '{self.opponent_loses_by}'. "
+                f"Valid: {list(OPPONENT_LOSS_MODES)}"
+            )
+        if self.opponent != "zero" and self.opponent_loses_by != "any":
+            raise ValueError(
+                f"opponent_loses_by='{self.opponent_loses_by}' handicaps side B, but "
+                f"opponent='{self.opponent}' is a real policy-driven contestant, not a "
+                f"dummy. A duel where one side plays by different rules is not the game "
+                f"being evaluated — use opponent_loses_by='any' outside the dummy levels."
             )
         for name in ("pos_noise", "yaw_noise", "joint_noise"):
             value = getattr(self, name)

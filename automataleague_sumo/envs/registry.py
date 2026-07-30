@@ -31,6 +31,7 @@ class EnvSpec:
     action_scale_by_level: tuple[float, ...]     # q-target scale (radians)
     shaping_scale_by_level: tuple[float, ...]    # anneals the shaping terms away
     opponent_by_level: tuple[str, ...]           # see config.OPPONENT_MODES
+    opponent_loses_by_level: tuple[str, ...]     # see config.OPPONENT_LOSS_MODES
 
     def config(self, level: int, **overrides) -> SumoConfig:
         """Default ``SumoConfig`` for this env at ``level``, before hydra overrides."""
@@ -45,6 +46,7 @@ class EnvSpec:
             ring_radius=self.ring_radius,
             level=level,
             opponent=self.opponent_by_level[level],
+            opponent_loses_by=self.opponent_loses_by_level[level],
             shaping_scale=self.shaping_scale_by_level[level],
             action_scale=self.action_scale_by_level[level],
         )
@@ -71,6 +73,11 @@ ENVIRONMENTS: dict[str, EnvSpec] = {
         # self-play, L4 league play against a checkpoint pool.
         shaping_scale_by_level=(1.0, 1.0, 0.7, 0.4, 0.2),
         opponent_by_level=("zero", "zero", "frozen", "self", "pool"),
+        # A zero-action dummy collapses on its own in ~1.2 s, so at L0 it cannot
+        # lose at all (the task is purely balance) and at L1 it loses only by
+        # being put out (the task is purely pushing). From L2 the opponent is a
+        # real policy and plays by the ordinary rules.
+        opponent_loses_by_level=("none", "ring_out", "any", "any", "any"),
     ),
 }
 
@@ -98,33 +105,49 @@ def make_env(
     num_envs: int | None = None,
     reward_cfg: RewardConfig | None = None,
     term_cfg: TerminationConfig | None = None,
+    backend_kwargs: dict | None = None,
     **cfg_overrides,
 ):
     """Instantiate a registered env.
 
-    backend: ``"cpu"`` (one duel, renderable) or ``"warp"`` (GPU, batched — Phase C).
+    backend: ``"cpu"`` (one duel, renderable) or ``"warp"`` (GPU, batched).
     ``opponent_robot`` defaults to ``robot``, the symmetric self-play case.
     ``num_envs`` only has meaning for ``backend="warp"``; the CPU backend is a
     single renderable duel and rejects any explicit ``num_envs`` rather than
     silently ignoring it.
+
+    ``cfg_overrides`` are ``SumoConfig`` fields and apply to every backend.
+    ``backend_kwargs`` are the chosen backend's own constructor arguments
+    (``device``, ``nconmax``, ``njmax`` for Warp); keeping the two separate is
+    what makes an unknown ``SumoConfig`` field an error instead of silently
+    becoming a backend argument, or the reverse.
     """
+    backend_kwargs = dict(backend_kwargs or {})
     spec = get_env_spec(env_id)
     lvl = spec.n_levels - 1 if level is None else int(level)
     cfg = spec.config(lvl, **cfg_overrides)
 
     if backend == "cpu":
+        if backend_kwargs:
+            raise ValueError(
+                f"backend='cpu' got unexpected backend_kwargs "
+                f"{sorted(backend_kwargs)} — those are Warp-only arguments.")
         if num_envs is not None:
             raise ValueError(
                 f"backend='cpu' is a single renderable duel and does not support "
-                f"num_envs (got {num_envs}). Batched execution arrives with the "
-                f"Warp backend in Phase C."
+                f"num_envs (got {num_envs}). Use backend='warp' for batched duels."
             )
         from automataleague_sumo.envs.sumo.sumo_cpu import SumoEnvCPU
 
         return SumoEnvCPU(robot=robot, opponent_robot=opponent_robot, cfg=cfg,
                           reward_cfg=reward_cfg, term_cfg=term_cfg)
     if backend == "warp":
-        raise NotImplementedError(
-            "The batched MuJoCo-Warp backend arrives in Phase C. "
-            "Use backend='cpu' for a single renderable duel.")
+        # Imported lazily: mujoco-warp is a GPU-only dependency, and importing the
+        # registry must stay possible on a CPU-only install.
+        from automataleague_sumo.envs.sumo.sumo_warp import SumoEnvWarp
+
+        return SumoEnvWarp(robot=robot, opponent_robot=opponent_robot, cfg=cfg,
+                           reward_cfg=reward_cfg, term_cfg=term_cfg,
+                           **({} if num_envs is None else {"num_envs": num_envs}),
+                           **backend_kwargs)
     raise ValueError(f"Unknown backend '{backend}' (use 'cpu' or 'warp')")

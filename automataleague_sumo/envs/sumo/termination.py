@@ -32,6 +32,24 @@ A_WINS = 1
 B_WINS = 2
 DRAW = 3
 
+# Row-relative outcome codes: the same duel seen from one contestant's own side.
+# A duel-level A_WINS reads as R_WIN on side A's row and R_LOSS on side B's. This
+# is what lets a win rate aggregated over a self-play batch mean something, since
+# every row is then reporting on itself rather than on a fixed side of the ring.
+R_ONGOING = 0
+R_WIN = 1
+R_LOSS = 2
+R_DRAW = 3
+
+
+def row_outcome(outcome: Tensor, as_side_a: bool) -> Tensor:
+    """Recode a duel outcome ``[N]`` from side A's or side B's point of view."""
+    win_code, loss_code = (A_WINS, B_WINS) if as_side_a else (B_WINS, A_WINS)
+    out = torch.full_like(outcome, R_ONGOING)
+    out = torch.where(outcome == win_code, torch.full_like(outcome, R_WIN), out)
+    out = torch.where(outcome == loss_code, torch.full_like(outcome, R_LOSS), out)
+    return torch.where(outcome == DRAW, torch.full_like(outcome, R_DRAW), out)
+
 
 def side_lost(
     state: RobotState, robot: RobotSpec, cfg: SumoConfig, tc: TerminationConfig,
@@ -59,6 +77,24 @@ def side_lost(
     return ring_out | fell_off | down, code
 
 
+def _filter_opponent_loss(lost: Tensor, code: Tensor, mode: str) -> Tensor:
+    """Restrict which loss conditions actually count against side B.
+
+    Early curriculum levels face a zero-action dummy, which collapses under its
+    own weight in about 1.2 s. Under the ordinary rules that is a free win for
+    the learner roughly 60 steps into every episode, so the dummy's eligibility
+    to lose is a per-level choice. See ``config.OPPONENT_LOSS_MODES``.
+    """
+    if mode == "any":
+        return lost
+    if mode == "none":
+        return torch.zeros_like(lost)
+    if mode == "ring_out":
+        # Put out of the ring or off the platform counts; falling over does not.
+        return (code == LOSS_RING_OUT) | (code == LOSS_FELL_OFF)
+    raise ValueError(f"Unknown opponent_loses_by mode '{mode}'")
+
+
 def compute_termination(
     state_a: RobotState,
     state_b: RobotState,
@@ -71,7 +107,8 @@ def compute_termination(
     """``(terminated, truncated, lost_a, lost_b, outcome)``, each ``[N]``."""
     device = state_a.base_pos.device
     lost_a, _ = side_lost(state_a, robot_a, cfg, tc)
-    lost_b, _ = side_lost(state_b, robot_b, cfg, tc)
+    lost_b, code_b = side_lost(state_b, robot_b, cfg, tc)
+    lost_b = _filter_opponent_loss(lost_b, code_b, cfg.opponent_loses_by)
 
     def const(v):
         return torch.tensor(v, device=device, dtype=torch.int32)
