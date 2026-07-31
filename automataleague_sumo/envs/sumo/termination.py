@@ -23,9 +23,10 @@ from automataleague_sumo.envs.sumo.state import RobotState
 from automataleague_sumo.robots import RobotSpec
 
 LOSS_NONE = 0
-LOSS_RING_OUT = 1
-LOSS_FELL_OFF = 2
-LOSS_DOWN = 3
+LOSS_RING_OUT = 1     # the base left the ring
+LOSS_FELL_OFF = 2     # the base dropped below the platform
+LOSS_DOWN = 3         # too low or too tilted
+LOSS_STEP_OUT = 4     # a foot came down off the edge
 
 ONGOING = 0
 A_WINS = 1
@@ -52,9 +53,21 @@ def row_outcome(outcome: Tensor, as_side_a: bool) -> Tensor:
 
 
 def side_lost(
-    state: RobotState, robot: RobotSpec, cfg: SumoConfig, tc: TerminationConfig,
+    state: RobotState,
+    foot_pos: Tensor,
+    robot: RobotSpec,
+    cfg: SumoConfig,
+    tc: TerminationConfig,
 ) -> tuple[Tensor, Tensor]:
-    """``(lost [N] bool, code [N] int32)`` for one side."""
+    """``(lost [N] bool, code [N] int32)`` for one side.
+
+    ``foot_pos`` is ``[N, n_feet, 3]``, the world positions of this side's foot
+    geoms. The base tests alone are not enough: the base can sit well inside the
+    rim while a foot is planted on the floor beyond it. Measured on a trained
+    self-play policy, a foot reached 1.856 m against a 1.5 m ring and sank the
+    full 0.30 m to the floor, and a foot was outside the ring on 7.1% of all
+    steps with the duel still running.
+    """
     device = state.base_pos.device
     radius = torch.linalg.norm(state.base_pos[:, :2], dim=-1)
     height = state.base_pos[:, 2] - cfg.platform_height
@@ -66,30 +79,48 @@ def side_lost(
         | (tilt_angle(state.base_quat) > math.radians(tc.max_tilt_deg))
     )
 
+    # Stepping out: a foot both beyond the rim AND below the ring surface, which
+    # is a foot that has come down off the edge. Requiring both is what makes this
+    # the sumo rule (touching down outside) rather than a stricter one that would
+    # also punish a recovery step swung over the line and brought back in the air.
+    foot_r = torch.linalg.norm(foot_pos[..., :2], dim=-1)            # [N, n_feet]
+    foot_down = foot_pos[..., 2] < cfg.platform_height
+    step_out = ((foot_r > cfg.ring_radius) & foot_down).any(dim=-1)
+
     # Priority matters: once the base is outside the rim, `height` is measured
     # against a platform the robot is no longer above, so ring_out must win.
+    def const(v):
+        return torch.tensor(v, device=device, dtype=torch.int32)
+
     code = torch.full_like(radius, LOSS_NONE, dtype=torch.int32)
-    code = torch.where(down, torch.tensor(LOSS_DOWN, device=device, dtype=torch.int32), code)
-    code = torch.where(
-        fell_off, torch.tensor(LOSS_FELL_OFF, device=device, dtype=torch.int32), code)
-    code = torch.where(
-        ring_out, torch.tensor(LOSS_RING_OUT, device=device, dtype=torch.int32), code)
-    return ring_out | fell_off | down, code
+    code = torch.where(down, const(LOSS_DOWN), code)
+    code = torch.where(step_out, const(LOSS_STEP_OUT), code)
+    code = torch.where(fell_off, const(LOSS_FELL_OFF), code)
+    code = torch.where(ring_out, const(LOSS_RING_OUT), code)
+    return ring_out | fell_off | down | step_out, code
 
 
 def compute_termination(
     state_a: RobotState,
     state_b: RobotState,
+    foot_pos_a: Tensor,
+    foot_pos_b: Tensor,
     robot_a: RobotSpec,
     robot_b: RobotSpec,
     step_count: Tensor,
     cfg: SumoConfig,
     tc: TerminationConfig,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    """``(terminated, truncated, lost_a, lost_b, outcome)``, each ``[N]``."""
+    """``(terminated, truncated, lost_a, lost_b, outcome)``, each ``[N]``.
+
+    ``foot_pos_*`` are ``[N, n_feet, 3]`` world positions of each side's foot
+    geoms. Required rather than optional: a backend that forgot to supply them
+    would silently run without the stepping-out rule, which is the failure this
+    signature exists to prevent.
+    """
     device = state_a.base_pos.device
-    lost_a, _ = side_lost(state_a, robot_a, cfg, tc)
-    lost_b, _ = side_lost(state_b, robot_b, cfg, tc)
+    lost_a, _ = side_lost(state_a, foot_pos_a, robot_a, cfg, tc)
+    lost_b, _ = side_lost(state_b, foot_pos_b, robot_b, cfg, tc)
     if cfg.dummy_opponent:
         # A zero-action humanoid collapses on its own in about 1.2 s. Letting that
         # count as a loss would hand the learner a free +win roughly 60 steps into

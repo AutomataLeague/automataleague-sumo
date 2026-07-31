@@ -139,6 +139,8 @@ class SumoEnvWarp(EnvBase):
                 side.joint_qposadr, dtype=torch.long, device=d)
             self._base_qadr[key] = int(side.base_qposadr)
         self._base_dofadr = {k: int(s.base_dofadr) for k, s in self._sides.items()}
+        self._foot_ids = {k: torch.as_tensor(s.foot_geom_ids, dtype=torch.long, device=d)
+                          for k, s in self._sides.items()}
 
     def _setup_contact_lookup(self) -> None:
         """Per-geom side tag plus the buffers for the batched A-touches-B test.
@@ -372,8 +374,11 @@ class SumoEnvWarp(EnvBase):
 
         qpos, qvel = self._state_tensors()
         sa, sb = extract_duel_state(qpos, qvel, self.scene)
+        geom_xpos = wp.to_torch(self._mjw_data.geom_xpos)          # [N, ngeom, 3]
         terminated, truncated, lost_a, lost_b, outcome = compute_termination(
-            sa, sb, self.scene.a.robot, self.scene.b.robot,
+            sa, sb,
+            geom_xpos[:, self._foot_ids["a"]], geom_xpos[:, self._foot_ids["b"]],
+            self.scene.a.robot, self.scene.b.robot,
             self.step_count, self.cfg, self.term_cfg)
 
         horizon = self.term_cfg.max_episode_steps

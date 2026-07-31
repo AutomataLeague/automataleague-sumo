@@ -60,10 +60,16 @@ COLLAPSED = dict(x=0.0, z=SumoConfig().platform_height + 0.25)
 PUSHED_OUT = dict(x=2.0)                 # beyond ring_radius 1.5
 
 
+def _feet():
+    """Planted on the ring surface: the only foot configuration that is not a
+    loss, so these tests keep measuring the dummy rule and nothing else."""
+    return torch.tensor([[[0.0, 0.0, SumoConfig().platform_height + 0.02]]])
+
+
 def _terminate(a_kw, b_kw, opponent, step=1):
     cfg = SumoConfig(opponent=opponent)
     return compute_termination(
-        _state(**a_kw), _state(**b_kw), ROBOT, ROBOT,
+        _state(**a_kw), _state(**b_kw), _feet(), _feet(), ROBOT, ROBOT,
         torch.tensor([step]), cfg, TerminationConfig())
 
 

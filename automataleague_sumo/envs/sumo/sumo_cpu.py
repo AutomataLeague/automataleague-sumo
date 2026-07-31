@@ -61,6 +61,7 @@ class SumoEnvCPU:
             side.prefix: torch.tensor(side.robot.home_joint_qpos, dtype=torch.float32)
             for side in self.scene.sides
         }
+        self._foot_ids = {side.prefix: side.foot_geom_ids for side in self.scene.sides}
         self._render_size = render_size
         self._renderer = None
         self._rng = np.random.default_rng()
@@ -88,6 +89,11 @@ class SumoEnvCPU:
         obs_b = build_observation(sb, sa, self._prev_action["b/"], self._home["b/"],
                                   self.cfg.ring_radius, contact)
         return obs_a.squeeze(0).numpy(), obs_b.squeeze(0).numpy(), sa, sb
+
+    def _foot_positions(self, prefix: str) -> torch.Tensor:
+        """``[1, n_feet, 3]`` world positions of one side's foot geoms."""
+        return torch.tensor(
+            self.data.geom_xpos[self._foot_ids[prefix]], dtype=torch.float32).unsqueeze(0)
 
     def _apply_reset_noise(self) -> None:
         """Perturb both spawns. Training and evaluation must share this noise, or
@@ -166,7 +172,8 @@ class SumoEnvCPU:
         qpos, qvel = self._tensors()
         sa, sb = extract_duel_state(qpos, qvel, self.scene)
         terminated, truncated, lost_a, lost_b, outcome = compute_termination(
-            sa, sb, self.scene.a.robot, self.scene.b.robot,
+            sa, sb, self._foot_positions("a/"), self._foot_positions("b/"),
+            self.scene.a.robot, self.scene.b.robot,
             self.step_count, self.cfg, self.term_cfg)
 
         horizon = self.term_cfg.max_episode_steps
