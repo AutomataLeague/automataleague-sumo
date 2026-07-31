@@ -180,6 +180,18 @@ reachable foot spreads, so an upper bound on gait rather than a step length):
 | 0.7 (40°) | 1.11 m | 1.01 m | 0.48 m | 0.49 m | 8% |
 | 1.0 (57°) | 1.41 m | 1.17 m | 0.77 m | 0.56 m | 15% |
 
+`action_scale` is a **symmetric window around the home pose**, which is why one
+number cannot serve the whole robot. The G1's home pose is a relaxed carry with
+the elbows bent 1.28 rad, so at a uniform 0.5 the elbow can only reach 0.78 rad:
+the arm can never get within 45 degrees of straight and simply hangs. It is not a
+policy choice, it is a hard cap, and it looks exactly like the policy declining
+to use its arms.
+
+`RobotSpec.joint_scale` gives per-joint multipliers on top. The G1 keeps 0.5 on
+the legs (see the crouch finding below) and takes 2.5x on the arms, which opens
+the elbow window to `[0.03, 2.53]` and raises measured arm reach from 0.42 m to
+0.59 m.
+
 Two things to read off it.
 
 **The curve never flattens.** The mechanical joint limits are not the binding

@@ -55,3 +55,27 @@ def test_joint_limits_clip_a_large_scale_and_not_a_small_one(envelope):
     rng = np.random.default_rng(0)
     assert envelope.measure(0.1, 400, rng)["clipped"] == pytest.approx(0.0, abs=1e-3)
     assert envelope.measure(2.0, 400, rng)["clipped"] > 0.2
+
+
+def test_the_envelope_uses_the_robots_per_joint_scale(envelope):
+    """A scalar here measures a different robot from the one being trained.
+
+    Verified against the real defect: before this, introducing a 2.5x arm
+    multiplier left the reported arm reach unchanged at 0.42 m, because the tool
+    applied one number to every joint. With it, the same measurement reports
+    0.59 m. Asserted by clearing the multipliers and watching `reach` fall, since
+    `reach` depends only on the arm joints.
+    """
+    rng = np.random.default_rng(0)
+    with_arms = envelope.measure(0.5, 600, rng)["reach"]
+
+    original = envelope.robot.joint_scale
+    try:
+        envelope.robot.joint_scale = {}
+        without = envelope.measure(0.5, 600, rng)["reach"]
+    finally:
+        envelope.robot.joint_scale = original
+
+    assert with_arms > without + 0.05, (
+        f"the arm multiplier changed nothing: {without:.3f} -> {with_arms:.3f} m, "
+        f"so the tool is applying a scalar")

@@ -54,9 +54,9 @@ class SumoEnvCPU:
             )
         self.data = mujoco.MjData(self.model)
 
-        self.action_scale = (
-            self.cfg.action_scale if self.cfg.action_scale is not None
-            else self.scene.a.robot.action_scale)
+        # Per joint, not one number: the legs need a small window for balance and
+        # the arms a large one to reach at all. See RobotSpec.joint_scale.
+        self.action_scale = self.scene.a.robot.scale_vector(self.cfg.action_scale)
         self._home = {
             side.prefix: torch.tensor(side.robot.home_joint_qpos, dtype=torch.float32)
             for side in self.scene.sides

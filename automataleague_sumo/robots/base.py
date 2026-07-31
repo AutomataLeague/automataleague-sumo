@@ -39,6 +39,13 @@ class RobotSpec:
             same order as ``joint_names``. The action offsets from this pose.
         action_scale: Magnitude in radians of the position offset a unit action
             applies around ``home_joint_qpos``.
+        joint_scale: Per-joint multipliers on ``action_scale``, keyed by a
+            substring of the joint name. Different limbs want different amounts
+            of range: legs need a small window for fine balance control, arms need
+            a large one to reach at all. A single number cannot serve both, and
+            the G1 is the case in point — its home pose has the elbows bent 73
+            degrees, so at a uniform 0.5 rad the arm can never get within 45
+            degrees of straight and simply hangs.
         foot_geoms: Collision geoms that are legitimately allowed to touch the
             ground. Everything else touching the ground means the robot is down.
         team_colour_meshes: Visual meshes that carry the team colour, so the two
@@ -59,6 +66,7 @@ class RobotSpec:
     actuator_names: list[str]
     home_joint_qpos: np.ndarray
     action_scale: float = 0.5
+    joint_scale: dict[str, float] = field(default_factory=dict)
     foot_geoms: list[str] = field(default_factory=list)
     team_colour_meshes: list[str] = field(default_factory=list)
 
@@ -74,6 +82,32 @@ class RobotSpec:
                 f"{self.name}: {len(self.actuator_names)} actuators vs "
                 f"{len(self.joint_names)} joints — must match 1:1"
             )
+        for key, multiplier in self.joint_scale.items():
+            if multiplier <= 0:
+                raise ValueError(
+                    f"{self.name}: joint_scale[{key!r}] = {multiplier}, must be > 0")
+            if not any(key in name for name in self.joint_names):
+                raise ValueError(
+                    f"{self.name}: joint_scale key {key!r} matches no joint, so it "
+                    f"would silently do nothing. Joints: {self.joint_names}")
+
+    def scale_vector(self, action_scale: float | None = None) -> np.ndarray:
+        """Per-joint action scale in radians, in ``joint_names`` order.
+
+        The offset a unit action applies to joint i is ``scale_vector()[i]``, so
+        this is the whole action-to-pose mapping in one array. ``action_scale``
+        overrides the robot's own base value (that is how ``SumoConfig`` retunes a
+        run) while keeping the per-joint multipliers, since those describe the
+        robot's proportions rather than a training choice.
+        """
+        base = self.action_scale if action_scale is None else float(action_scale)
+        out = np.full(self.n_joints, base, dtype=np.float32)
+        for i, name in enumerate(self.joint_names):
+            for key, multiplier in self.joint_scale.items():
+                if key in name:
+                    out[i] = base * multiplier
+                    break
+        return out
 
     # --- derived dimensions -------------------------------------------------
     @property

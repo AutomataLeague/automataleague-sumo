@@ -102,8 +102,14 @@ class Envelope:
         self.home_geometry = self._geometry(np.zeros(self.n), scale=0.0)
 
     def _geometry(self, action: np.ndarray, scale: float) -> dict:
-        """Pose the robot at the commanded joint targets and read its geometry."""
-        target = self.home + scale * action
+        """Pose the robot at the commanded joint targets and read its geometry.
+
+        Uses the robot's per-joint scale vector, not the bare scalar, so this
+        measures the mapping the env actually applies. A scalar here reported an
+        arm reach that did not move when the arm multiplier was introduced, which
+        is a tool quietly measuring a different robot from the one being trained.
+        """
+        target = self.home + self.robot.scale_vector(scale) * action
         target = np.where(self.limited,
                           np.clip(target, self.jrange[:, 0], self.jrange[:, 1]), target)
         self.data.qpos[:] = 0.0
@@ -141,7 +147,7 @@ class Envelope:
             out[metric] = (min(values) if metric == "crouch" else max(values))
         # Fraction of joint commands the mechanical limits clipped away.
         probe = rng.uniform(-1.0, 1.0, size=(samples, self.n))
-        target = self.home + scale * probe
+        target = self.home + self.robot.scale_vector(scale) * probe
         clipped = np.where(self.limited,
                            np.clip(target, self.jrange[:, 0], self.jrange[:, 1]), target)
         out["clipped"] = float(np.mean(~np.isclose(target, clipped, atol=1e-9)))

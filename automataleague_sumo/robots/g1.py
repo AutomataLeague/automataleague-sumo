@@ -65,7 +65,16 @@ def make_g1() -> RobotSpec:
         joint_names=list(_JOINTS),
         actuator_names=list(_JOINTS),   # actuators share joint names in g1_mjx.xml
         home_joint_qpos=_HOME_QPOS,
-        action_scale=0.5,        # provisional; MEASURE it with tools/measure_reach.py
+        # 0.5 is the largest uniform scale that cannot crouch into an instant loss
+        # (tools/measure_reach.py: deepest commandable drop 0.294 m against a
+        # 0.353 m down-rule budget), so the legs are capped there.
+        action_scale=0.5,
+        # The arms are not. Their home pose is a relaxed carry with the elbows bent
+        # 1.28 rad, so a uniform 0.5 leaves them stuck between 45 and 102 degrees of
+        # bend — they cannot straighten to push, and they hang. 2.5x opens the elbow
+        # to nearly straight and lets the shoulders raise, without touching the leg
+        # window that the balance policy depends on.
+        joint_scale={"shoulder": 2.5, "elbow": 2.5, "wrist": 2.5},
         foot_geoms=list(_FEET),
         # The chest only. It is the largest continuous surface and stays visible
         # from every camera angle. Deliberately NOT `head_link` or `logo_link`,

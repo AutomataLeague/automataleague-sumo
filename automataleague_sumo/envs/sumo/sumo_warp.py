@@ -94,9 +94,11 @@ class SumoEnvWarp(EnvBase):
 
         self._obs_dim = observation_dim(self.robot)
         self._act_dim = self.robot.action_dim
-        self._action_scale = (
-            self.cfg.action_scale if self.cfg.action_scale is not None
-            else self.robot.action_scale)
+        # Per joint, not one number: the legs need a small window for balance and
+        # the arms a large one to reach at all. See RobotSpec.joint_scale.
+        self._action_scale = torch.as_tensor(
+            self.robot.scale_vector(self.cfg.action_scale),
+            dtype=torch.float32, device=self._device)
 
         self._setup_device_tensors()
         self._setup_contact_lookup()
