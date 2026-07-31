@@ -190,6 +190,26 @@ its own disturbance). They are absent from the observation on purpose: a
 disturbance the policy can see coming is a control input, and lets it pre-brace
 rather than learn to recover.
 
+Retraining with them, warm-started from the unperturbed policy, 60M frames:
+
+| shove | no perturbation | trained with pushes |
+| --- | --- | --- |
+| 0.0 m/s | 6/6 | 6/6 |
+| 0.5 m/s | 0/6 | **6/6** |
+| 1.0 m/s | 0/6 | **6/6** |
+| 1.5 m/s | 0/6 | 3/6 |
+| 2.0 m/s | 0/6 | 0/6 |
+
+Robust through the 1.0 m/s it trained against and halfway to 1.5, with the wall
+at 2.0. Clean episode length went from 731.9 to a full 750 out of 750, with 100%
+of duels reaching the timeout.
+
+The warm start is itself the sharpest measurement of the old policy's
+brittleness: loaded in, its first recorded episode length under 1.0 m/s shoves
+was **83.6 steps**, and the first push lands at step 75. It survived exactly
+until something touched it, then relearned balance from scratch over the same
+~20M frames the cold run needed.
+
 `tools/warp_smoke.py` checks the four things that are expensive to discover late:
 that the solver has not diverged, that contacts fit inside `nconmax` (MuJoCo-Warp
 silently *drops* contacts past the cap rather than raising), that the two sides
