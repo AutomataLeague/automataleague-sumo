@@ -50,25 +50,53 @@ both sides in self-play.
 ### No difficulty levels
 
 There is no curriculum ladder, on purpose. In a competitive game the difficulty
-**is** the opponent, and under self-play the opponent improves exactly as fast as
-the policy does. An authored schedule of environment levels would be a second
-difficulty knob fighting the first.
+**is** the opponent, and under self-play it tracks the policy's own strength. An
+authored schedule of environment levels would be a second difficulty knob
+fighting the first.
 
-`opponent` selects who drives side B, which is a statement about the game rather
-than about how hard it is:
+There is also no opponent pool. Sampling from past checkpoints exists to stop
+self-play cycling between exploitable strategies, and cycling needs a discrete
+strategy space to cycle in. Whole-body balance and shoving does not obviously
+have one. If naive self-play does destabilise, it shows up directly as win rate
+oscillating against held-out old checkpoints, and a pool can be added then.
+
+`opponent` therefore has exactly two values:
 
 | `opponent` | who is on the other side |
 | --- | --- |
 | `self` | the current policy, driving both robots. The real game, and the default. |
-| `pool` | sampled from a growing set of past snapshots plus the current policy |
-| `zero` | a passive dummy. Only for bootstrapping standing on a fresh robot. |
+| `zero` | a passive dummy that cannot lose. Only for bootstrapping standing on a fresh robot. |
 
-The pool is what makes "stronger and growing" monotone. Naive self-play against
-the current policy alone can cycle: it beats its present self by exploiting a
-weakness, then trains that weakness away and forgets the counter.
+The dummy cannot lose because a zero-action humanoid collapses on its own in
+about 1.2 s, which would hand the learner a free win roughly 60 steps into every
+episode. That is derived from the opponent mode, not configured separately: a
+handicap with its own switch is a handicap that can be left on by accident.
 
-`shaping_scale` multiplies every shaping term and never the terminal win, so
-lowering it moves the policy closer to optimising the actual win condition.
+### The reward
+
+Three things, in the order they matter, plus two regularizers:
+
+| term | what it pays for | weight |
+| --- | --- | --- |
+| `win` | putting the opponent out or down. Terminal, zero sum. | 10.0 |
+| `push` | driving them from the centre to the rim | 3.0 |
+| `alive` | a whole episode spent standing | 2.0 |
+| `centre` | a whole episode spent pinned against the rim (a penalty) | 1.0 |
+| `action`, `joint_vel` | regularizers | 0.5 each |
+
+**Every weight is a whole-episode value**, so they are directly comparable to
+each other and to `win`. That is the property whose absence caused the only
+reward bug this project has had: with per-step weights, a facing bonus worth 0.3
+a step quietly outscored a terminal +10 by thirteen times over a 750-step
+episode, and nothing in the numbers said so. `RewardConfig` now refuses to
+construct if the whole shaping budget can outscore a win.
+
+`push` is a delta on the opponent's radius, so it telescopes to the total change
+across the episode. It cannot be farmed by shoving them out and letting them back
+in, and it is the only term not divided by the episode horizon.
+
+Run `tools/reward_balance.py` before training. It prints every term against
+`win` and exits non-zero if surviving at the rim scores worse than giving up.
 
 ## Robots
 
@@ -109,40 +137,31 @@ python tools/push_test.py checkpoints/standing/ppo_best.pt
 # watch what a checkpoint actually does
 python tools/render_policy.py checkpoints/standing/ppo_best.pt -o duel.mp4
 
-# bootstrap standing on a fresh robot — see the override recipe below,
-# the shipped reward weights do NOT work for this
+# bootstrap standing on a fresh robot
 python examples/ppo_sumo.py run_name=standing env.num_envs=2048 \
-    env.arena.opponent=zero env.arena.opponent_loses_by=none \
-    env.reward_weights.alive=0.3 env.reward_weights.center=0.1 \
-    env.reward_weights.push=0 env.reward_weights.engage=0
+    env.arena.opponent=zero env.reward_weights.push=0
 
 # the real game, warm-started from the standing policy
 python examples/ppo_sumo.py env.num_envs=2048 \
     init_checkpoint=checkpoints/standing/ppo_best.pt
 ```
 
-### The standing reward, and why the defaults are wrong for it
+### Bootstrapping standing
 
-Run `tools/reward_balance.py` before training. With the shipped
-`RewardConfig`, the net per-step reward for simply staying alive at the 0.9 m
-spawn radius is **-0.130** guaranteed, **-0.080** even under the most generous
-reading of the `engage` term. Every extra step the robot survives at spawn costs
-it reward, and the break-even radius is 0.474 m, well inside where it starts.
+Two robots that both collapse in 1.5 s produce nothing but simultaneous losses,
+which score as draws and give the win term nothing to work with. So a fresh robot
+learns to stand first, against a dummy, and self-play warm-starts from that:
 
-That is not a theoretical concern. Measured over the first 9M frames of standing:
-the policy crept inward from 0.98 m to 0.34 m while its episode length sat at 60
-steps, and only began extending episodes (60 → 66) once it had crossed inside
-0.474 m. It optimized exactly what it was asked to.
+```bash
+python examples/ppo_sumo.py run_name=standing env.arena.opponent=zero \
+    env.reward_weights.push=0
 
-To bootstrap standing, make survival unconditionally positive and drop the two
-terms that describe an opponent which is only scenery:
-
+python examples/ppo_sumo.py init_checkpoint=checkpoints/standing/ppo_best.pt
 ```
-env.reward_weights.alive=0.3     # was 0.05
-env.reward_weights.center=0.1    # was 0.5  -> break-even moves to 2.6 m, outside the ring
-env.reward_weights.push=0        # the dummy's radius is noise the learner cannot control
-env.reward_weights.engage=0      # likewise for facing a robot that is lying down
-```
+
+`push` is zeroed for the bootstrap because the dummy's radius is decided by how
+it happens to topple, which the learner cannot influence. Paying for it is pure
+variance in the advantage estimate.
 
 ### Judge standing against doing nothing, not against zero
 
@@ -239,10 +258,8 @@ Phase C has the batched MuJoCo-Warp backend, the PPO stack, and **standing
 solved**: 750 of 750 steps, and robust to a 1.0 m/s shove in 6 of 6 seeds. That
 policy drives both robots unchanged.
 
-Still to come: `opponent="pool"` (currently raises `NotImplementedError`), which
-is the only difficulty mechanism the task needs; a rebalanced fighting reward,
-since the shaping terms currently integrate to more than the win over a full
-episode; a measured `action_scale` to replace the provisional 0.5; and the Elo
+Still to come: a measured `action_scale` to replace the provisional 0.5, a
+self-play run long enough to say anything about fighting, and the Elo
 leaderboard.
 
 ## Licence

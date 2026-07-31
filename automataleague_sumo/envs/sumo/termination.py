@@ -7,7 +7,7 @@ The "down" test is a proxy: base height above the platform plus torso tilt. The
 sumo-accurate rule is that touching the ground with anything other than the soles
 loses, which needs contact inspection against ``SideInfo.foot_geom_ids``. That is
 a deliberate follow-up, not an oversight — the proxy has no false positives while
-the robot is upright, which is all the early curriculum needs.
+the robot is upright.
 """
 
 from __future__ import annotations
@@ -77,24 +77,6 @@ def side_lost(
     return ring_out | fell_off | down, code
 
 
-def _filter_opponent_loss(lost: Tensor, code: Tensor, mode: str) -> Tensor:
-    """Restrict which loss conditions actually count against side B.
-
-    A zero-action bootstrap dummy collapses under its own weight in about 1.2 s.
-    Under the ordinary rules that is a free win for the learner roughly 60 steps
-    into every episode, so the dummy's eligibility to lose is configurable. See
-    ``config.OPPONENT_LOSS_MODES``. Against a real opponent this is always "any".
-    """
-    if mode == "any":
-        return lost
-    if mode == "none":
-        return torch.zeros_like(lost)
-    if mode == "ring_out":
-        # Put out of the ring or off the platform counts; falling over does not.
-        return (code == LOSS_RING_OUT) | (code == LOSS_FELL_OFF)
-    raise ValueError(f"Unknown opponent_loses_by mode '{mode}'")
-
-
 def compute_termination(
     state_a: RobotState,
     state_b: RobotState,
@@ -107,8 +89,12 @@ def compute_termination(
     """``(terminated, truncated, lost_a, lost_b, outcome)``, each ``[N]``."""
     device = state_a.base_pos.device
     lost_a, _ = side_lost(state_a, robot_a, cfg, tc)
-    lost_b, code_b = side_lost(state_b, robot_b, cfg, tc)
-    lost_b = _filter_opponent_loss(lost_b, code_b, cfg.opponent_loses_by)
+    lost_b, _ = side_lost(state_b, robot_b, cfg, tc)
+    if cfg.dummy_opponent:
+        # A zero-action humanoid collapses on its own in about 1.2 s. Letting that
+        # count as a loss would hand the learner a free +win roughly 60 steps into
+        # every bootstrap episode, and it would learn to wait.
+        lost_b = torch.zeros_like(lost_b)
 
     def const(v):
         return torch.tensor(v, device=device, dtype=torch.int32)

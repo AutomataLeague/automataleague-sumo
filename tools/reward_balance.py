@@ -1,13 +1,16 @@
-"""Is surviving one more step actually worth more than the penalties for doing so?
+"""Does the reward actually pay for the behaviour it is asking for?
 
     python tools/reward_balance.py
-    python tools/reward_balance.py --alive 0.3 --center 0.1
+    python tools/reward_balance.py --alive 4 --centre 0.5
 
-Run this before a run, not after. The first sumo-1 standing run spent four
-million frames learning to creep toward the middle while its episode length sat
-at 60 steps, because the default weights made survival at the spawn radius worth
--0.080 per step. The training curves looked like slow progress; the policy was in
-fact optimising exactly what it had been asked to.
+Run this before a run, not after. The first standing run spent four million
+frames learning to creep toward the middle while its episode length sat at 60
+steps, because the weights of the day made survival at the spawn radius worth
+-0.130 per step. The training curves looked like slow progress; the policy was
+optimising exactly what it had been asked to.
+
+Every weight is a whole-episode value (see RewardConfig), so everything printed
+here is directly comparable to `win`.
 """
 
 from __future__ import annotations
@@ -16,11 +19,7 @@ import argparse
 
 from automataleague_sumo.envs.registry import get_env_spec
 from automataleague_sumo.envs.sumo.config import RewardConfig
-from automataleague_sumo.envs.sumo.rewards import (
-    break_even_radius,
-    engage_ceiling,
-    survival_margin,
-)
+from automataleague_sumo.envs.sumo.rewards import break_even_radius, survival_margin
 
 
 def main():
@@ -37,45 +36,38 @@ def main():
         value = getattr(args, field, None)
         if value is not None:
             setattr(rc, field, value)
+    rc.__post_init__()          # re-validate the overridden combination
 
-    spec = get_env_spec(args.env)
-    print(f"{args.env}  win={rc.win}  alive={rc.alive}  center={rc.center}\n")
+    cfg = get_env_spec(args.env).config()
+    R, spawn = cfg.ring_radius, cfg.spawn_radius
 
-    bad = []
-    # Both opponents a run can face. The dummy is only for bootstrapping
-    # standing, but it still has to pay for the behaviour it is asking for.
-    for opponent in ("self", "zero"):
-        extra = {"opponent_loses_by": "none"} if opponent == "zero" else {}
-        cfg = spec.config(opponent=opponent, **extra)
-        R, s = cfg.ring_radius, cfg.shaping_scale
-        spawn = cfg.spawn_radius
-        floor = survival_margin(rc, R, spawn, s)
-        # `engage` is the only per-step term that can push the floor back up. Its
-        # ceiling depends on how far apart the two robots are, and at spawn they
-        # are a full diameter of the spawn circle apart.
-        best = floor + s * engage_ceiling(rc, 2.0 * spawn)
-        break_even = break_even_radius(rc, R)
-        flag = "ok" if floor > 0 else ("borderline" if best > 0 else "NEGATIVE")
-        print(f"opponent={cfg.opponent:<6} loses_by={cfg.opponent_loses_by:<9} "
-              f"shaping_scale={s:<4}")
-        print(f"  survival margin at the {spawn:.2f} m spawn : {floor:+.4f} / step "
-              f"guaranteed, {best:+.4f} best case  [{flag}]")
-        print(f"  break-even radius                        : {break_even:.3f} m "
-              f"({'inside' if break_even < spawn else 'outside'} the spawn)")
-        # A whole episode of survival against the one-off cost of losing, which is
-        # the trade the policy is actually being offered.
-        horizon = 750
-        print(f"  {horizon} steps of survival               : {floor * horizon:+.1f} "
-              f"vs {-rc.win:+.1f} for losing\n")
-        if best <= 0:
-            bad.append(opponent)
+    print(f"{args.env}   every number below is a whole-episode value\n")
+    print(f"  win (terminal, zero sum)        {rc.win:+7.2f}")
+    print(f"  push them centre -> rim         {rc.push:+7.2f}")
+    print(f"  a whole episode alive           {rc.alive:+7.2f}")
+    print(f"  a whole episode pinned at rim   {-rc.centre:+7.2f}")
+    print(f"  shaping budget vs win           "
+          f"{rc.push + rc.alive + rc.centre:7.2f} / {rc.win:.2f}\n")
 
-    if bad:
+    print(f"{'radius (m)':>12} {'survive a whole episode':>25}")
+    for radius in (0.0, spawn, R):
+        margin = survival_margin(rc, R, radius)
+        flag = "ok" if margin > 0 else "NEGATIVE"
+        label = " (spawn)" if radius == spawn else (" (rim)" if radius == R else "")
+        print(f"{radius:12.2f} {margin:+25.3f}  [{flag}]{label}")
+
+    break_even = break_even_radius(rc, R)
+    where = "outside the ring" if break_even > R else (
+        "inside the spawn" if break_even < spawn else "between spawn and rim")
+    print(f"\n  break-even radius {break_even:.3f} m ({where}); "
+          f"spawn is {spawn:.2f} m, rim is {R:.2f} m")
+
+    if survival_margin(rc, R, R) <= 0:
         raise SystemExit(
-            f"opponents {bad} pay the policy to end the episode sooner at the spawn "
-            f"radius, even in the best case. Raise `alive`, lower `center`, or move "
-            f"the spawn inward before training them.")
-    print("survival pays at the spawn radius against every opponent")
+            "surviving at the rim scores worse than ending the episode, so a "
+            "policy that is being pushed out is paid to give up. Raise `alive` "
+            "or lower `centre`.")
+    print("  survival pays everywhere inside the ring")
 
 
 if __name__ == "__main__":

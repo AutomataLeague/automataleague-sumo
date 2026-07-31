@@ -48,8 +48,10 @@ def main():
     actor.load_state_dict(state["actor_state_dict"])
     actor.eval()
 
+    # No scripted pushes during the test: this applies ONE controlled impulse and
+    # measures recovery, so background shoves would confound the reading.
     sumo_cfg = get_env_spec(cfg.env.name).config(
-        opponent="zero", opponent_loses_by="none")
+        opponent="zero", push_interval_steps=0, push_speed=0.0)
     rc, tc = RewardConfig(), TerminationConfig()
     env = SumoEnvCPU(robot=cfg.env.robot, cfg=sumo_cfg, reward_cfg=rc, term_cfg=tc)
     base_dof = env.scene.a.base_dofadr

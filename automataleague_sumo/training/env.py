@@ -13,8 +13,8 @@ from automataleague_sumo.envs.sumo.config import RewardConfig, TerminationConfig
 # SumoConfig fields a run is allowed to override from its yaml. Anything outside
 # this list is a typo rather than an intention, and SumoConfig rejects it.
 _ARENA_KEYS = (
-    "ring_radius", "platform_height", "band_width", "spawn_frac", "opponent",
-    "opponent_loses_by", "shaping_scale", "action_scale", "frame_skip",
+    "ring_radius", "platform_height", "spawn_frac", "opponent", "action_scale",
+    "frame_skip", "push_interval_steps", "push_speed",
     "pos_noise", "yaw_noise", "joint_noise",
 )
 

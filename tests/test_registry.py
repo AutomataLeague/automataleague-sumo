@@ -46,9 +46,9 @@ def test_overrides_are_applied_and_validated():
 
 def test_the_bootstrap_opponent_is_reachable_through_an_override():
     """Standing still has to be trainable on a fresh robot, just not as a level."""
-    cfg = get_env_spec("sumo-1").config(opponent="zero", opponent_loses_by="none")
+    cfg = get_env_spec("sumo-1").config(opponent="zero")
     assert cfg.opponent == "zero"
-    assert cfg.opponent_loses_by == "none"
+    assert cfg.dummy_opponent is True
 
 
 def test_unknown_env_id_raises():

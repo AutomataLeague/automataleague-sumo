@@ -23,29 +23,30 @@ env:
   njmax: 600
 
   arena:
-    # opponent: who drives side B. "self" is the real game; "zero" is a passive
-    # dummy, only for bootstrapping standing on a fresh robot.
+    # opponent: "self" is the real game; "zero" is a passive dummy, only for
+    # bootstrapping standing on a fresh robot.
     opponent: null
-    opponent_loses_by: null
     ring_radius: null
     platform_height: null
     spawn_frac: null
-    shaping_scale: null
     action_scale: null
     frame_skip: null
+    push_interval_steps: null
+    push_speed: null
     pos_noise: null
     yaw_noise: null
     joint_noise: null
 
+
   reward_weights:
+    # Whole-episode values, so each reads directly against `win`. See RewardConfig.
     win: null
-    center: null
     push: null
-    engage: null
-    engage_range: null
     alive: null
+    centre: null
     action: null
     joint_vel: null
+
 
   termination:
     fall_height_frac: null

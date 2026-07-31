@@ -2,10 +2,9 @@
 
 Runs the shared task logic at batch size 1. Used for local validation, for
 rendering, and for head-to-head evaluation of two checkpoints. The batched
-MuJoCo-Warp backend used for training arrives in Phase C and consumes exactly the
-same task logic modules at batch N, where N is the number of parallel WORLDS —
-each world containing BOTH robots of one duel. Only the stacked policy view over
-both sides is batch 2N; a Phase C implementer who puts one robot per world would
+MuJoCo-Warp backend consumes exactly the same task logic modules at batch N,
+where N is the number of parallel WORLDS, each holding BOTH robots of one duel.
+Only the stacked policy view over both sides is 2N; one robot per world would
 build 2N single-robot worlds whose robots never collide.
 
 The API is duel level: ``step`` takes both actions. Wrapping this as a
@@ -51,8 +50,7 @@ class SumoEnvCPU:
                 f"(got a={self.scene.a.robot.name!r}, b={self.scene.b.robot.name!r}). "
                 f"action_scale, observation_dim and action_dim are all derived from "
                 f"side A's robot, so a cross-robot matchup with a different action "
-                f"scale or joint count would silently produce a wrong-scale duel. "
-                f"Per-side handling arrives with Phase C."
+                f"scale or joint count would silently produce a wrong-scale duel."
             )
         self.data = mujoco.MjData(self.model)
 
@@ -171,12 +169,13 @@ class SumoEnvCPU:
             sa, sb, self.scene.a.robot, self.scene.b.robot,
             self.step_count, self.cfg, self.term_cfg)
 
+        horizon = self.term_cfg.max_episode_steps
         rew_a, comps_a = compute_reward(
             sa, sb, self._prev_radius["b/"], lost_a, lost_b, actions["a/"],
-            self.cfg.ring_radius, self.reward_cfg, self.cfg.shaping_scale)
+            self.cfg.ring_radius, self.reward_cfg, horizon)
         rew_b, comps_b = compute_reward(
             sb, sa, self._prev_radius["a/"], lost_b, lost_a, actions["b/"],
-            self.cfg.ring_radius, self.reward_cfg, self.cfg.shaping_scale)
+            self.cfg.ring_radius, self.reward_cfg, horizon)
 
         self._prev_action = actions
         self._prev_radius = {

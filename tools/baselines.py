@@ -55,7 +55,11 @@ def main():
 
     from automataleague_sumo.envs.sumo.sumo_cpu import SumoEnvCPU
 
-    cfg = get_env_spec(args.env).config(opponent="zero", opponent_loses_by="none")
+    # No pushes: this measures how long the robot lasts under its own dynamics,
+    # which is the bar a trained policy has to clear. Shoving it would measure
+    # something else and make the bar depend on the perturbation schedule.
+    cfg = get_env_spec(args.env).config(
+        opponent="zero", push_interval_steps=0, push_speed=0.0)
     tc = TerminationConfig()
     env = SumoEnvCPU(robot=args.robot, cfg=cfg, reward_cfg=RewardConfig(), term_cfg=tc)
     seeds = list(range(args.seeds))

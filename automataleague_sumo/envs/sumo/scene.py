@@ -24,6 +24,7 @@ from automataleague_sumo.robots import RobotSpec, get_robot
 _CLAY = [0.72, 0.55, 0.36, 1.0]
 _BAND = [0.96, 0.95, 0.92, 1.0]
 _PAINT_HALF_Z = 0.001
+_BAND_WIDTH = 0.08      # painted rim band, purely visual
 
 
 @dataclass
@@ -112,7 +113,7 @@ def _add_dohyo(spec: mujoco.MjSpec, cfg: SumoConfig) -> None:
     )
     spec.worldbody.add_geom(
         name="ring_inner", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-        size=[cfg.ring_radius - cfg.band_width, _PAINT_HALF_Z],
+        size=[cfg.ring_radius - _BAND_WIDTH, _PAINT_HALF_Z],
         pos=[0.0, 0.0, h + 3 * _PAINT_HALF_Z], rgba=_CLAY, material="clay",
         contype=0, conaffinity=0,
     )

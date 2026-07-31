@@ -27,9 +27,8 @@ N = 8
 
 
 def _env(opponent):
-    extra = {"opponent_loses_by": "none"} if opponent == "zero" else {}
     return SumoEnvWarp(robot="g1", num_envs=N, device="cuda:0",
-                       cfg=get_env_spec("sumo-1").config(opponent=opponent, **extra))
+                       cfg=get_env_spec("sumo-1").config(opponent=opponent))
 
 
 @pytest.fixture(scope="module")

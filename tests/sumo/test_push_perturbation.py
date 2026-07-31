@@ -40,12 +40,18 @@ def test_a_magnitude_without_a_schedule_is_rejected():
         SumoConfig(push_interval_steps=0, push_speed=1.0)
 
 
-def test_pushes_are_off_by_default():
-    """Adding an unrequested disturbance to every existing config would silently
-    change what every previous result meant."""
+def test_pushes_are_on_by_default():
+    """Balance without a disturbance is a held pose, and that is not something a
+    config should have to opt into. Measured: the first policy trained without
+    pushes survived a full 750-step episode and still fell to a 0.5 m/s shove in
+    6 of 6 seeds."""
     cfg = SumoConfig()
-    assert cfg.push_interval_steps == 0
-    assert cfg.push_speed == 0.0
+    assert cfg.push_interval_steps > 0
+    assert cfg.push_speed > 0
+    # Several shoves per episode, or most episodes never see one.
+    from automataleague_sumo.envs.sumo.config import TerminationConfig
+
+    assert TerminationConfig().max_episode_steps // cfg.push_interval_steps >= 3
 
 
 def test_negative_push_speed_is_rejected():
@@ -58,7 +64,7 @@ def test_negative_push_speed_is_rejected():
 def test_no_push_arrives_when_the_feature_is_off():
     """The control. Without it, every assertion below could be measuring ordinary
     contact and gravity rather than the perturbation."""
-    env = _env()
+    env = _env(push_interval_steps=0, push_speed=0.0)
     env.reset(seed=0)
     zero = np.zeros(env.action_dim)
     jumps = []
@@ -165,14 +171,8 @@ def test_push_magnitude_scales_with_push_speed():
 
 # ----------------------------------------------------------------- registry
 
-def test_the_season_default_enables_pushes():
-    """Balance without a disturbance is a held pose. Measured: the first policy
-    trained without pushes survived a full 750-step episode and still fell to a
-    0.5 m/s shove in 6 of 6 seeds."""
+def test_the_registry_does_not_quietly_disable_pushes():
+    """The season default must not undo the SumoConfig default."""
     cfg = get_env_spec("sumo-1").config()
     assert cfg.push_interval_steps > 0
     assert cfg.push_speed > 0
-    # At least a few shoves per episode, or most episodes never see one.
-    from automataleague_sumo.envs.sumo.config import TerminationConfig
-
-    assert TerminationConfig().max_episode_steps // cfg.push_interval_steps >= 3

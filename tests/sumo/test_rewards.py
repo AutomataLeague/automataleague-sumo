@@ -9,6 +9,8 @@ from automataleague_sumo.envs.sumo.state import RobotState
 
 RING = 1.5
 N = 29
+HORIZON = 750          # matches TerminationConfig.max_episode_steps
+RATE = 1.0 / HORIZON   # rate terms are whole-episode weights spread over it
 
 
 def _state(x, y, yaw=0.0, joint_vel=0.0):
@@ -24,14 +26,14 @@ def _state(x, y, yaw=0.0, joint_vel=0.0):
 
 
 def _reward(own, opp, prev_opp_r=None, own_lost=False, opp_lost=False,
-            action=None, rc=None, shaping_scale=1.0):
+            action=None, rc=None, horizon=HORIZON):
     if prev_opp_r is None:
         prev_opp_r = torch.linalg.norm(opp.base_pos[:, :2], dim=-1)
     return compute_reward(
         own, opp, prev_opp_r,
         torch.tensor([own_lost]), torch.tensor([opp_lost]),
         action if action is not None else torch.zeros(1, N),
-        RING, rc or RewardConfig(), shaping_scale,
+        RING, rc or RewardConfig(), horizon,
     )
 
 
@@ -49,11 +51,14 @@ def test_every_shaping_term_matches_its_configured_weight():
     """Pin each term to a value derived independently from its config field.
 
     Sign and ordering tests cannot catch a coefficient SWAP between two terms
-    that share a sign: `rc.action` (0.01) and `rc.joint_vel` (0.001) are both
-    positive penalties, as are `rc.center` (0.5) and `rc.engage` (0.3). Swap
-    either pair and every other test in this file still passes. Nor is `alive`
-    pinned anywhere else: the `shaping_scale=0` test forces it to zero, which is
-    trivially true of any scaled term regardless of its magnitude.
+    that share a sign: `rc.action` and `rc.joint_vel` are both positive penalties,
+    as are `rc.centre` and `rc.alive`. Swap either pair and every other test in
+    this file still passes.
+
+    It also pins WHICH terms are spread over the episode horizon and which are
+    not. `push` telescopes, so it is already an episode-scale quantity; dividing
+    it too would shrink it 750-fold and make the one dense proxy for winning
+    invisible.
     """
     rc = RewardConfig()
     own = _state(-0.75, 0.0, yaw=0.0, joint_vel=0.5)   # r_own = 0.75 = R/2
@@ -62,16 +67,14 @@ def test_every_shaping_term_matches_its_configured_weight():
 
     total, c = _reward(own, opp, prev_opp_r=torch.tensor([0.6]), action=action, rc=rc)
 
-    dist = 1.65                                        # 0.9 - (-0.75)
     assert c["win"].item() == pytest.approx(0.0)
-    assert c["centre"].item() == pytest.approx(-rc.center * 0.5 ** 2, abs=1e-6)
+    # rate terms: whole-episode weight, spread over the horizon
+    assert c["centre"].item() == pytest.approx(-rc.centre * 0.5 ** 2 * RATE, rel=1e-6)
+    assert c["alive"].item() == pytest.approx(rc.alive * RATE, rel=1e-6)
+    assert c["action"].item() == pytest.approx(-rc.action * 1.0 * RATE, rel=1e-6)
+    assert c["joint_vel"].item() == pytest.approx(-rc.joint_vel * 0.25 * RATE, rel=1e-6)
+    # delta term: NOT spread, because it telescopes over the episode by itself
     assert c["push"].item() == pytest.approx(rc.push * (0.9 - 0.6) / RING, abs=1e-6)
-    # own faces +x and the opponent is straight ahead, so alignment is exactly 1.
-    assert c["engage"].item() == pytest.approx(
-        rc.engage * math.exp(-dist / rc.engage_range), abs=1e-6)
-    assert c["alive"].item() == pytest.approx(rc.alive, abs=1e-9)
-    assert c["action"].item() == pytest.approx(-rc.action * 1.0, abs=1e-9)
-    assert c["joint_vel"].item() == pytest.approx(-rc.joint_vel * 0.25, abs=1e-9)
     assert total.item() == pytest.approx(sum(v.item() for v in c.values()), abs=1e-6)
 
 
@@ -115,17 +118,14 @@ def test_centre_term_penalizes_drifting_toward_the_rim():
     assert far["centre"].item() < 0
 
 
-def test_engage_term_rewards_facing_the_opponent():
-    b = _state(0.5, 0.0, math.pi)
-    _, facing = _reward(_state(-0.5, 0.0, yaw=0.0), b)          # looking at B
-    _, away = _reward(_state(-0.5, 0.0, yaw=math.pi), b)        # looking away
-    assert facing["engage"].item() > 0 > away["engage"].item()
-
-
-def test_engage_term_decays_with_distance():
-    _, close = _reward(_state(-0.2, 0.0), _state(0.2, 0.0, math.pi))
-    _, distant = _reward(_state(-1.4, 0.0), _state(1.4, 0.0, math.pi))
-    assert close["engage"].item() > distant["engage"].item()
+def test_there_is_no_facing_reward():
+    """`engage` paid for pointing at the opponent and decayed with distance. Over
+    a 750-step episode it integrated to 136 against a win of 10, so the
+    highest-scoring behaviour was to stand close and pose rather than to fight.
+    Reintroducing a dense positional term is how that comes back."""
+    _, comps = _reward(_state(-0.5, 0.0), _state(0.5, 0.0, math.pi))
+    assert "engage" not in comps
+    assert set(comps) == {"win", "push", "centre", "alive", "action", "joint_vel"}
 
 
 def test_action_and_joint_velocity_are_penalized():
@@ -137,21 +137,30 @@ def test_action_and_joint_velocity_are_penalized():
     assert spinning["joint_vel"].item() < 0
 
 
-def test_shaping_scale_zero_leaves_only_the_sparse_win_term():
-    a, b = _state(-1.2, 0.0), _state(0.5, 0.0, math.pi)
-    total, comps = _reward(a, b, opp_lost=True, shaping_scale=0.0)
-    assert total.item() == pytest.approx(RewardConfig().win)
-    for name, value in comps.items():
-        if name != "win":
-            assert value.item() == pytest.approx(0.0, abs=1e-6)
+def test_winning_outweighs_a_whole_episode_of_shaping():
+    """The property the weights exist to guarantee, checked on real numbers
+    rather than trusted to the config validator alone: a full episode of the best
+    possible shaping must still be worth less than one win."""
+    rc = RewardConfig()
+    a, b = _state(-0.1, 0.0), _state(0.5, 0.0, math.pi)
+    _, comps = _reward(a, b)
+    per_step_best = comps["alive"].item() + comps["centre"].item()
+    best_case = per_step_best * HORIZON + rc.push
+    assert best_case < rc.win, (
+        f"a whole episode of shaping is worth {best_case:.2f} against a win of "
+        f"{rc.win} — farming beats fighting")
 
 
-def test_shaping_scale_scales_every_shaping_term_but_not_the_win_term():
-    a, b = _state(-1.2, 0.0), _state(0.5, 0.0, math.pi)
-    _, full = _reward(a, b, opp_lost=True, shaping_scale=1.0)
-    _, half = _reward(a, b, opp_lost=True, shaping_scale=0.5)
-    assert half["win"].item() == pytest.approx(full["win"].item())
-    assert half["centre"].item() == pytest.approx(0.5 * full["centre"].item())
+def test_the_rate_terms_scale_with_the_horizon_and_push_does_not():
+    """A longer episode must not make the per-step terms worth more in total, and
+    must not shrink the delta term. This is what keeps every weight comparable to
+    `win` no matter what max_episode_steps is set to."""
+    a, b = _state(-0.75, 0.0), _state(0.9, 0.0, math.pi)
+    _, short = _reward(a, b, prev_opp_r=torch.tensor([0.6]), horizon=100)
+    _, long = _reward(a, b, prev_opp_r=torch.tensor([0.6]), horizon=1000)
+    assert short["alive"].item() == pytest.approx(10 * long["alive"].item())
+    assert short["centre"].item() == pytest.approx(10 * long["centre"].item())
+    assert short["push"].item() == pytest.approx(long["push"].item())
 
 
 def test_reward_is_batched():
@@ -165,6 +174,7 @@ def test_reward_is_batched():
         joint_pos=torch.zeros(6, N), joint_vel=torch.zeros(6, N))
     total, comps = compute_reward(
         own, opp, torch.zeros(6), torch.zeros(6, dtype=torch.bool),
-        torch.zeros(6, dtype=torch.bool), torch.zeros(6, N), RING, RewardConfig())
+        torch.zeros(6, dtype=torch.bool), torch.zeros(6, N), RING, RewardConfig(),
+        HORIZON)
     assert total.shape == (6,)
     assert all(v.shape == (6,) for v in comps.values())

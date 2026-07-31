@@ -17,8 +17,8 @@ each world the *policy* controls, and that is what sets the TorchRL batch size:
   naive self-play, with no opponent bookkeeping anywhere. This works only because
   the observation is expressed entirely in each robot's own base frame, so side B
   cannot tell it is side B.
-* every other mode — only side A is the learner, so the batch is ``[N]`` and side
-  B is driven by the env (held at its home pose for ``"zero"``).
+* ``opponent="zero"`` — a passive dummy, only for bootstrapping standing on a
+  fresh robot. Side B is held at its home pose and the batch is ``[N]``.
 
 Both rows of a world share that world's ``done``, because a duel ends for both
 contestants at once.
@@ -85,13 +85,6 @@ class SumoEnvWarp(EnvBase):
         # Both sides learn only under true self-play; otherwise side B is a dummy
         # driven by the env and never appears in the policy's batch.
         self._two_sided = self.cfg.opponent == "self"
-        if self.cfg.opponent == "pool":
-            raise NotImplementedError(
-                "opponent='pool' needs the snapshot-pool machinery: a growing set "
-                "of past policies to sample side B from. That pool is the only "
-                "difficulty mechanism this task has, so it is the next thing to "
-                "build. Implemented so far: 'zero' (bootstrap dummy) and 'self'."
-            )
         self._num_rows = self._num_worlds * (2 if self._two_sided else 1)
 
         self._mjw_model = mjw.put_model(self._mjm)
@@ -367,7 +360,7 @@ class SumoEnvWarp(EnvBase):
             act_a, act_b = actions[:self._num_worlds], actions[self._num_worlds:]
         else:
             # A zero action holds the dummy at its home pose, which is what makes
-            # it collapse: the curriculum's job at L0/L1 is set by opponent_loses_by.
+            # it collapse. It cannot lose by doing so (see SumoConfig.dummy_opponent).
             act_a = actions
             act_b = torch.zeros_like(act_a)
         self._write_ctrl(act_a, act_b)
@@ -383,12 +376,13 @@ class SumoEnvWarp(EnvBase):
             sa, sb, self.scene.a.robot, self.scene.b.robot,
             self.step_count, self.cfg, self.term_cfg)
 
+        horizon = self.term_cfg.max_episode_steps
         rew_a, _ = compute_reward(
             sa, sb, self.prev_radius["b"], lost_a, lost_b, act_a,
-            self.cfg.ring_radius, self.reward_cfg, self.cfg.shaping_scale)
+            self.cfg.ring_radius, self.reward_cfg, horizon)
         rew_b, _ = compute_reward(
             sb, sa, self.prev_radius["a"], lost_b, lost_a, act_b,
-            self.cfg.ring_radius, self.reward_cfg, self.cfg.shaping_scale)
+            self.cfg.ring_radius, self.reward_cfg, horizon)
 
         r_a = torch.linalg.norm(sa.base_pos[:, :2], dim=-1)
         r_b = torch.linalg.norm(sb.base_pos[:, :2], dim=-1)

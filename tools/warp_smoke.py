@@ -34,7 +34,7 @@ def parse_args():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--env", default="sumo-1")
     p.add_argument("--robot", default="g1")
-    p.add_argument("--opponent", default="self",
+    p.add_argument("--opponent", default="self", choices=("self", "zero"),
                    help="who drives side B: self (the real game) or zero (a dummy)")
     p.add_argument("--num-envs", type=int, default=1024)
     p.add_argument("--steps", type=int, default=200)
@@ -55,10 +55,7 @@ def build(args, num_envs=None, seed=0):
     from automataleague_sumo.envs.sumo.sumo_warp import SumoEnvWarp
 
     torch.manual_seed(seed)
-    overrides = {"opponent": args.opponent}
-    if args.opponent == "zero":
-        overrides["opponent_loses_by"] = "none"
-    cfg = get_env_spec(args.env).config(**overrides)
+    cfg = get_env_spec(args.env).config(opponent=args.opponent)
     return SumoEnvWarp(
         robot=args.robot, num_envs=num_envs or args.num_envs, device=args.device,
         cfg=cfg, nconmax=args.nconmax, njmax=args.njmax,
@@ -148,7 +145,7 @@ def main():
           f"two_sided={env.two_sided}")
     print(f"  obs={env.observation_spec['observation'].shape[-1]}  "
           f"act={env.action_spec.shape[-1]}  "
-          f"opponent={env.cfg.opponent!r}  loses_by={env.cfg.opponent_loses_by!r}")
+          f"opponent={env.cfg.opponent!r}  dummy={env.cfg.dummy_opponent}")
 
     td = env.reset()
     rows = env.batch_size[0]

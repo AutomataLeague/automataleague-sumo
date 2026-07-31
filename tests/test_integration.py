@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from automataleague_sumo import A_WINS, B_WINS, DRAW, ONGOING, make_env
+from automataleague_sumo.envs.sumo.config import RewardConfig
 
 
 def test_a_random_duel_runs_to_a_conclusion():
@@ -73,28 +74,27 @@ def test_a_duel_can_be_replayed_exactly_from_a_seed():
 
 
 def test_every_opponent_mode_instantiates():
-    """Both opponents a run can actually face. "pool" is registered but its
-    machinery is not built yet, so it is expected to refuse loudly rather than
-    silently behave like one of the others."""
+    """Both opponents a run can face. There are only two, on purpose."""
     for opponent in ("self", "zero"):
-        extra = {"opponent_loses_by": "none"} if opponent == "zero" else {}
-        env = make_env("sumo-1", backend="cpu", opponent=opponent, **extra)
+        env = make_env("sumo-1", backend="cpu", opponent=opponent)
         obs_a, _ = env.reset(seed=0)
         assert obs_a.shape == (110,)
         assert env.cfg.opponent == opponent
 
 
-def test_shaping_scale_actually_reaches_the_reward():
-    """A smaller shaping_scale must produce strictly smaller shaping components on
-    an identical transition. Asserted on two scales rather than on one value, so a
-    reward that ignores shaping_scale entirely cannot pass."""
+def test_reward_weights_reach_the_env():
+    """A weight change must show up in the components of a real duel step, or the
+    config is decorative. Two values rather than one, so an env that hard-codes
+    the reward cannot pass."""
     comps = {}
-    for scale in (1.0, 0.2):
-        env = make_env("sumo-1", backend="cpu", shaping_scale=scale,
-                       pos_noise=0.0, yaw_noise=0.0, joint_noise=0.0)
+    for centre in (1.0, 0.25):
+        env = make_env("sumo-1", backend="cpu",
+                       pos_noise=0.0, yaw_noise=0.0, joint_noise=0.0,
+                       push_interval_steps=0, push_speed=0.0,
+                       reward_cfg=RewardConfig(centre=centre))
         env.reset(seed=0)
         zero = np.zeros(env.action_dim, dtype=np.float32)
         _, _, _, _, info = env.step(zero, zero)
-        comps[scale] = info["reward_components_a"]
-    assert abs(comps[0.2]["centre"]) < abs(comps[1.0]["centre"])
-    assert abs(comps[0.2]["alive"]) < abs(comps[1.0]["alive"])
+        comps[centre] = info["reward_components_a"]
+    assert abs(comps[0.25]["centre"]) == pytest.approx(
+        0.25 * abs(comps[1.0]["centre"]), rel=1e-5)

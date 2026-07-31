@@ -258,12 +258,11 @@ def _evaluate(actor, eval_env, cfg) -> dict[str, float]:
         metrics["eval/episode_length"] = float(rollout.batch_size[-1])
         metrics["eval/final_opp_radius"] = rollout["next", "opp_radius"].mean().item()
 
-    # Credit pushing the opponent out only where the opponent can actually be put
-    # out. Against a dummy that cannot lose, its final radius is decided by how it
-    # happens to topple, so including it would rank checkpoints partly on a
-    # quantity the learner has no influence over — noise worth 9 to 20 points
-    # against an episode length of 50 to 100.
-    scores_pushing = eval_env.base_env.cfg.opponent_loses_by != "none"
+    # Credit pushing the opponent out only when the opponent can actually be put
+    # out. Against a dummy, its final radius is decided by how it happens to
+    # topple, so including it would rank checkpoints partly on a quantity the
+    # learner has no influence over.
+    scores_pushing = not eval_env.base_env.cfg.dummy_opponent
     metrics["eval/score"] = (
         metrics["eval/episode_length"]
         + 100.0 * metrics.get("eval/win_rate", 0.0)

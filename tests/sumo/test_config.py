@@ -97,9 +97,12 @@ def test_all_opponent_modes_are_accepted():
 
 
 def test_the_opponent_modes_describe_who_plays_not_how_hard_it_is():
-    """"frozen" was a curriculum rung; with the ladder gone the growing opponent
-    is the pool, so the modes are only: nobody, yourself, or your own history."""
-    assert set(OPPONENT_MODES) == {"zero", "self", "pool"}
+    """Two modes, and one of them is only a bootstrap. "frozen" and "pool" were
+    curriculum machinery; a physical whole-body task has no discrete strategy
+    space to cycle in, so naive self-play needs no opponent history to stabilise
+    it. If it turns out to need one, win rate against held-out old checkpoints
+    will oscillate and say so."""
+    assert set(OPPONENT_MODES) == {"zero", "self"}
 
 
 def test_reward_and_termination_defaults():
