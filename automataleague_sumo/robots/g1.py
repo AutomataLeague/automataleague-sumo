@@ -65,6 +65,10 @@ def make_g1() -> RobotSpec:
         joint_names=list(_JOINTS),
         actuator_names=list(_JOINTS),   # actuators share joint names in g1_mjx.xml
         home_joint_qpos=_HOME_QPOS,
-        action_scale=0.5,        # provisional; refined by tools/measure_reach.py in Phase C
+        action_scale=0.5,        # provisional; MEASURE it with tools/measure_reach.py
         foot_geoms=list(_FEET),
+        # The chest only. It is the largest continuous surface and stays visible
+        # from every camera angle. Deliberately NOT `head_link` or `logo_link`,
+        # which hang off the same torso_link body — hence selecting by mesh.
+        team_colour_meshes=["torso_link"],
     )

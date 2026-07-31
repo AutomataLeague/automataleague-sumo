@@ -41,6 +41,14 @@ class RobotSpec:
             applies around ``home_joint_qpos``.
         foot_geoms: Collision geoms that are legitimately allowed to touch the
             ground. Everything else touching the ground means the robot is down.
+        team_colour_meshes: Visual meshes that carry the team colour, so the two
+            sides can be told apart on sight. Unprefixed names; the scene composer
+            adds the prefix. Meshes rather than bodies, because a body can carry
+            several: the G1 hangs its head and its chest logo off the same
+            ``torso_link`` body, so body-level selection cannot paint the chest
+            without also painting the head. Declared here because mesh names are a
+            property of the robot, not of the task. Empty means the whole robot is
+            tinted instead.
     """
 
     name: str
@@ -52,6 +60,7 @@ class RobotSpec:
     home_joint_qpos: np.ndarray
     action_scale: float = 0.5
     foot_geoms: list[str] = field(default_factory=list)
+    team_colour_meshes: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         self.home_joint_qpos = np.asarray(self.home_joint_qpos, dtype=np.float32)

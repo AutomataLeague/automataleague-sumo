@@ -26,6 +26,16 @@ _BAND = [0.96, 0.95, 0.92, 1.0]
 _PAINT_HALF_Z = 0.001
 _BAND_WIDTH = 0.08      # painted rim band, purely visual
 
+# Team tint. The two robots are the same model, so in a video the only way to
+# tell which is which is by colour. Applied as a blend toward the team hue rather
+# than a flat repaint, so the model keeps its own light and dark parts and still
+# reads as a G1 — at full strength both robots become featureless silhouettes and
+# you lose the shading that shows which way a limb is pointing.
+_TEAM_A = (0.20, 0.45, 0.95)     # blue
+_TEAM_B = (0.90, 0.25, 0.22)     # red
+_TINT = 1.0                      # 0 = untouched, 1 = flat team colour
+_VISUAL_GROUP = 2                # the rendered shell; 3 and 4 are collision proxies
+
 
 @dataclass
 class SideInfo:
@@ -194,6 +204,7 @@ def build_sumo_model(
             pos=[pose.x, pose.y, cfg.platform_height])
         spec.attach(robot.load_spec(), prefix=prefix, frame=frame)
         placed.append((robot, prefix, pose))
+    _tint_teams(spec, [(spec_a, "a/"), (spec_b, "b/")])
 
     model, sides, home = _compile_and_place(spec, placed, cfg)
 
@@ -216,6 +227,84 @@ def build_sumo_model(
         a=sides[0], b=sides[1], cfg=cfg, home_qpos=home,
         platform_geom_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "dohyo"),
     )
+
+
+def _tint_teams(spec: mujoco.MjSpec, sides, strength: float | None = None) -> None:
+    """Paint each robot's team-colour bodies, leaving the rest of it alone.
+
+    The two robots are the same model, so in a video the only way to tell which is
+    which is by colour. Only the bodies a robot declares in
+    ``RobotSpec.team_colour_meshes`` are painted, which for the G1 is the chest:
+    colouring the whole robot turns it into a solid block and loses the light and
+    dark shading that shows which way a limb is pointing.
+
+    Selection is by MESH rather than by body because a body can carry several. The
+    G1 hangs its head and its chest logo off the same ``torso_link`` body, so
+    body-level selection cannot paint the chest without also painting the head.
+
+    Implemented by adding one material per side and reassigning the selected
+    visual geoms to it, rather than by editing the robot's own materials. Those
+    are shared across the whole robot, so editing them could only ever recolour
+    all of it.
+
+    The new material inherits the original's specular and shininess, so the
+    painted chest still catches the light like the rest of the robot rather than
+    reading as a flat sticker. `strength` blends toward the team hue; at 1.0 the
+    chest is the pure colour, which is legible at video scale precisely because
+    everything around it is untouched.
+
+    A robot that declares no team meshes falls back to tinting its materials
+    wholesale, so a newly added robot is still distinguishable before anyone has
+    picked out its parts.
+    """
+    # Read the module constant at CALL time, not as a default argument. A default
+    # binds when the function is defined, so `scene._TINT = 0.0` from a caller
+    # would silently do nothing — which is exactly how the first tint sweep
+    # rendered four identical images.
+    strength = _TINT if strength is None else strength
+    if strength <= 0:
+        return
+
+    materials = {m.name: m for m in spec.materials}
+    for robot, prefix in sides:
+        team = _TEAM_A if prefix == "a/" else _TEAM_B
+        meshes = {f"{prefix}{name}" for name in robot.team_colour_meshes}
+        if not meshes:
+            _tint_materials(materials, prefix, team, strength)
+            continue
+
+        base = materials.get(f"{prefix}silver")
+        base_rgba = list(base.rgba) if base is not None else [0.7, 0.7, 0.7, 1.0]
+        paint = spec.add_material()
+        paint.name = f"{prefix}team"
+        paint.specular = base.specular if base is not None else 0.2
+        paint.shininess = base.shininess if base is not None else 0.2
+        paint.rgba = _blend(base_rgba, team, strength)
+
+        painted = 0
+        for geom in spec.geoms:
+            if geom.group == _VISUAL_GROUP and geom.meshname in meshes:
+                geom.material = paint.name
+                painted += 1
+        if painted == 0:
+            raise ValueError(
+                f"{robot.name}: none of team_colour_meshes "
+                f"{robot.team_colour_meshes} matched a visual mesh, so side "
+                f"{prefix.rstrip('/')!r} would render in the default colour and the "
+                f"two robots would be indistinguishable. A silently unpainted robot "
+                f"is the whole failure this exists to prevent.")
+
+
+def _tint_materials(materials, prefix, team, strength) -> None:
+    """Fallback for a robot that names no team bodies: recolour everything."""
+    for name, material in materials.items():
+        if name.startswith(prefix):
+            material.rgba = _blend(list(material.rgba), team, strength)
+
+
+def _blend(rgba, team, strength: float) -> list[float]:
+    """Move an rgb toward ``team`` by ``strength``, keeping the original alpha."""
+    return [(1.0 - strength) * rgba[i] + strength * team[i] for i in range(3)] + [rgba[3]]
 
 
 def _compile_and_place(
