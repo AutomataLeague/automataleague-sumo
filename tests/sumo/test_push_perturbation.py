@@ -41,7 +41,7 @@ def test_a_magnitude_without_a_schedule_is_rejected():
 
 
 def test_pushes_are_off_by_default():
-    """Adding an unrequested disturbance to every existing level would silently
+    """Adding an unrequested disturbance to every existing config would silently
     change what every previous result meant."""
     cfg = SumoConfig()
     assert cfg.push_interval_steps == 0
@@ -165,11 +165,11 @@ def test_push_magnitude_scales_with_push_speed():
 
 # ----------------------------------------------------------------- registry
 
-def test_the_balance_level_actually_enables_pushes():
-    """Level 0 exists to teach balance, and balance without a disturbance is a
-    held pose. Measured: the first level 0 policy survived a full 750-step episode
-    and still fell to a 0.5 m/s shove in 6 of 6 seeds."""
-    cfg = get_env_spec("sumo-1").config(0)
+def test_the_season_default_enables_pushes():
+    """Balance without a disturbance is a held pose. Measured: the first policy
+    trained without pushes survived a full 750-step episode and still fell to a
+    0.5 m/s shove in 6 of 6 seeds."""
+    cfg = get_env_spec("sumo-1").config()
     assert cfg.push_interval_steps > 0
     assert cfg.push_speed > 0
     # At least a few shoves per episode, or most episodes never see one.

@@ -1,10 +1,10 @@
-"""Can a standing policy survive a shove? The prerequisite for any fighting level.
+"""Can a standing policy survive a shove? The prerequisite for any fighting at all.
 
     python tools/push_test.py checkpoints/sumo1_L0/ppo_best.pt
 
 A policy trained against a collapsed dummy has never been touched. It can hold a
 stance for a full episode and still fall over the instant an opponent leans on
-it, and no level 0 metric would show that. This applies a horizontal impulse to
+it, and no standing metric would show that. This applies a horizontal impulse to
 the base partway through an episode and reports whether the robot recovers.
 
 Both robots are driven by the same policy, so this also exercises the side B
@@ -48,8 +48,8 @@ def main():
     actor.load_state_dict(state["actor_state_dict"])
     actor.eval()
 
-    level = int(state.get("level", 0))
-    sumo_cfg = get_env_spec(cfg.env.name).config(level)
+    sumo_cfg = get_env_spec(cfg.env.name).config(
+        opponent="zero", opponent_loses_by="none")
     rc, tc = RewardConfig(), TerminationConfig()
     env = SumoEnvCPU(robot=cfg.env.robot, cfg=sumo_cfg, reward_cfg=rc, term_cfg=tc)
     base_dof = env.scene.a.base_dofadr

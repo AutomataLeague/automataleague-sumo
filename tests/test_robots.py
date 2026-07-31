@@ -81,7 +81,7 @@ def test_g1_settles_on_its_feet_without_sinking_or_exploding():
 
     A humanoid holding a stance under a plain position controller is an
     inverted pendulum and will eventually topple; learning to balance is what
-    curriculum level 0 is for. What must hold here is that the robot lands on
+    the standing bootstrap is for. What must hold here is that the robot lands on
     the ground rather than falling through it, that it does not sink into the
     floor, and that the simulation stays finite.
     """

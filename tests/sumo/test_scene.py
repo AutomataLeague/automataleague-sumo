@@ -84,7 +84,7 @@ def test_the_assembled_scene_is_numerically_stable(built):
     """The scene must not blow up. This is about the solver, not about balance.
 
     A passive humanoid sinking into a crouch is expected physics; learning to
-    stand is what curriculum level 0 is for. A humanoid going AIRBORNE, or its
+    stand is what the standing bootstrap is for. A humanoid going AIRBORNE, or its
     pelvis reaching an absurd coordinate, means contact forces are diverging.
     An earlier revision of this scene inherited `cone=ELLIPTIC, impratio=100`
     from the quadruped parkour repo; against this model's `iterations=5` that

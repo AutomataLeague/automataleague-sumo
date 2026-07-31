@@ -71,7 +71,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("metrics", nargs="+", help="one or more metrics.jsonl files")
     ap.add_argument("-o", "--out", default="run.png")
-    ap.add_argument("--title", default="sumo-1 level 0 — learning to stay upright")
+    ap.add_argument("--title", default="sumo-1")
     args = ap.parse_args()
 
     runs = [(p.split("/")[-2], load(p)) for p in args.metrics]

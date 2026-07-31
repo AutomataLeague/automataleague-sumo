@@ -1,6 +1,6 @@
 """Whether surviving one more step outscores the penalties charged for doing so.
 
-This exists because the first level 0 training run answered "no" and nobody had
+This exists because the first standing run answered "no" and nobody had
 checked. The policy spent four million frames creeping from 0.98 m to 0.40 m
 while its episode length never left 60 steps, because at the 0.9 m spawn radius
 the default weights made each extra step of survival worth -0.080.
@@ -33,8 +33,8 @@ def test_margin_falls_as_the_robot_drifts_outward():
 
 
 def test_margin_scales_with_shaping_scale():
-    """The curriculum anneals shaping away, so the margin must anneal with it or
-    later levels would silently keep a level 0 survival incentive at full strength."""
+    """shaping_scale scales the whole shaping block, so the margin must scale with
+    it or a run that dialled shaping down would silently keep it at full strength."""
     rc = RewardConfig()
     full = survival_margin(rc, 1.5, 0.6, shaping_scale=1.0)
     half = survival_margin(rc, 1.5, 0.6, shaping_scale=0.5)
@@ -60,15 +60,15 @@ def test_the_shipped_defaults_pay_the_policy_to_die_at_the_spawn_radius():
     """The measured defect, pinned as a fact rather than a memory.
 
     This is deliberately an assertion about the CURRENT defaults being wrong for a
-    survival level. If someone later fixes RewardConfig, this test fails and tells
-    them to update the level 0 recipe in the README rather than silently leaving
+    survival run. If someone later fixes RewardConfig, this test fails and tells
+    them to update the standing recipe in the README rather than silently leaving
     two contradicting stories in the repository.
     """
     rc, cfg = RewardConfig(), SumoConfig()
     margin = survival_margin(rc, cfg.ring_radius, cfg.spawn_radius)
     assert margin < 0, (
         "RewardConfig defaults now pay for survival at the spawn radius. That is an "
-        "improvement — update the level 0 override recipe in the README and this test.")
+        "improvement — update the standing override recipe in the README and this test.")
     assert margin == pytest.approx(-0.1300, abs=1e-4)
     # Even the most generous reading stays negative, which is what makes this a
     # defect rather than merely a pessimistic bound. The expected value is worked
@@ -80,8 +80,8 @@ def test_the_shipped_defaults_pay_the_policy_to_die_at_the_spawn_radius():
     assert break_even_radius(rc, cfg.ring_radius) < cfg.spawn_radius
 
 
-def test_the_level_zero_override_recipe_fixes_it():
-    """The weights the README recommends for a survival level must actually work.
+def test_the_standing_override_recipe_fixes_it():
+    """The weights the README recommends for standing must actually work.
 
     Asserted at the spawn radius AND at the rim, because a recipe that only works
     where the robot starts still collapses the moment it gets pushed outward.

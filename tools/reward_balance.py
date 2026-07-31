@@ -3,7 +3,7 @@
     python tools/reward_balance.py
     python tools/reward_balance.py --alive 0.3 --center 0.1
 
-Run this before a level, not after. The first sumo-1 level 0 run spent four
+Run this before a run, not after. The first sumo-1 standing run spent four
 million frames learning to creep toward the middle while its episode length sat
 at 60 steps, because the default weights made survival at the spawn radius worth
 -0.080 per step. The training curves looked like slow progress; the policy was in
@@ -27,7 +27,6 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--env", default="sumo-1")
-    ap.add_argument("--levels", type=int, nargs="*", default=None)
     for field, default in vars(RewardConfig()).items():
         ap.add_argument(f"--{field.replace('_', '-')}", type=float, default=None,
                         help=f"override (default {default})")
@@ -40,12 +39,14 @@ def main():
             setattr(rc, field, value)
 
     spec = get_env_spec(args.env)
-    levels = args.levels if args.levels else list(range(spec.n_levels))
     print(f"{args.env}  win={rc.win}  alive={rc.alive}  center={rc.center}\n")
 
     bad = []
-    for level in levels:
-        cfg = spec.config(level)
+    # Both opponents a run can face. The dummy is only for bootstrapping
+    # standing, but it still has to pay for the behaviour it is asking for.
+    for opponent in ("self", "zero"):
+        extra = {"opponent_loses_by": "none"} if opponent == "zero" else {}
+        cfg = spec.config(opponent=opponent, **extra)
         R, s = cfg.ring_radius, cfg.shaping_scale
         spawn = cfg.spawn_radius
         floor = survival_margin(rc, R, spawn, s)
@@ -55,7 +56,8 @@ def main():
         best = floor + s * engage_ceiling(rc, 2.0 * spawn)
         break_even = break_even_radius(rc, R)
         flag = "ok" if floor > 0 else ("borderline" if best > 0 else "NEGATIVE")
-        print(f"level {level}  opponent={cfg.opponent:<7} shaping_scale={s:<4}")
+        print(f"opponent={cfg.opponent:<6} loses_by={cfg.opponent_loses_by:<9} "
+              f"shaping_scale={s:<4}")
         print(f"  survival margin at the {spawn:.2f} m spawn : {floor:+.4f} / step "
               f"guaranteed, {best:+.4f} best case  [{flag}]")
         print(f"  break-even radius                        : {break_even:.3f} m "
@@ -66,14 +68,14 @@ def main():
         print(f"  {horizon} steps of survival               : {floor * horizon:+.1f} "
               f"vs {-rc.win:+.1f} for losing\n")
         if best <= 0:
-            bad.append(level)
+            bad.append(opponent)
 
     if bad:
         raise SystemExit(
-            f"levels {bad} pay the policy to end the episode sooner at the spawn "
+            f"opponents {bad} pay the policy to end the episode sooner at the spawn "
             f"radius, even in the best case. Raise `alive`, lower `center`, or move "
             f"the spawn inward before training them.")
-    print("every level pays for survival at its spawn radius")
+    print("survival pays at the spawn radius against every opponent")
 
 
 if __name__ == "__main__":

@@ -69,7 +69,7 @@ def test_a_passive_duel_runs_to_a_clean_conclusion(env):
     it pitches forward and goes down within a couple of seconds.
 
     That is expected physics, not a wiring bug. Learning to stand is precisely
-    what curriculum level 0 is for, and the same behaviour was measured and
+    what the standing bootstrap is for, and the same behaviour was measured and
     accepted in the robot and scene tasks. What this test guards is that the
     ENVIRONMENT behaves well while it happens: finite observations and rewards on
     every step, and a clean terminal outcome rather than a hang, a NaN, or an

@@ -7,7 +7,7 @@ from automataleague_sumo import A_WINS, B_WINS, DRAW, ONGOING, make_env
 
 
 def test_a_random_duel_runs_to_a_conclusion():
-    env = make_env("sumo-1", level=0, backend="cpu")
+    env = make_env("sumo-1", backend="cpu")
     rng = np.random.default_rng(0)
     env.reset(seed=0)
 
@@ -44,7 +44,7 @@ def test_outcome_codes_are_part_of_the_public_api():
 
 
 def test_the_two_sides_see_the_same_world_from_opposite_perspectives():
-    env = make_env("sumo-1", level=0, backend="cpu")
+    env = make_env("sumo-1", backend="cpu")
     obs_a, obs_b = env.reset(seed=7)
     assert obs_a.shape == obs_b.shape
     # Distinct spawn noise means the two views must differ in detail...
@@ -58,7 +58,7 @@ def test_the_two_sides_see_the_same_world_from_opposite_perspectives():
 
 def test_a_duel_can_be_replayed_exactly_from_a_seed():
     def run():
-        env = make_env("sumo-1", level=0, backend="cpu")
+        env = make_env("sumo-1", backend="cpu")
         rng = np.random.default_rng(3)
         env.reset(seed=3)
         trace = []
@@ -72,24 +72,29 @@ def test_a_duel_can_be_replayed_exactly_from_a_seed():
     assert np.allclose(run(), run())
 
 
-def test_every_curriculum_level_instantiates():
-    for level in range(5):
-        env = make_env("sumo-1", level=level, backend="cpu")
+def test_every_opponent_mode_instantiates():
+    """Both opponents a run can actually face. "pool" is registered but its
+    machinery is not built yet, so it is expected to refuse loudly rather than
+    silently behave like one of the others."""
+    for opponent in ("self", "zero"):
+        extra = {"opponent_loses_by": "none"} if opponent == "zero" else {}
+        env = make_env("sumo-1", backend="cpu", opponent=opponent, **extra)
         obs_a, _ = env.reset(seed=0)
         assert obs_a.shape == (110,)
-        assert env.cfg.level == level
+        assert env.cfg.opponent == opponent
 
 
 def test_shaping_scale_actually_reaches_the_reward():
-    """Level 4 has the smallest shaping weight, so its shaping components must be
-    strictly smaller in magnitude than level 0's on an identical transition."""
+    """A smaller shaping_scale must produce strictly smaller shaping components on
+    an identical transition. Asserted on two scales rather than on one value, so a
+    reward that ignores shaping_scale entirely cannot pass."""
     comps = {}
-    for level in (0, 4):
-        env = make_env("sumo-1", level=level, backend="cpu",
+    for scale in (1.0, 0.2):
+        env = make_env("sumo-1", backend="cpu", shaping_scale=scale,
                        pos_noise=0.0, yaw_noise=0.0, joint_noise=0.0)
         env.reset(seed=0)
         zero = np.zeros(env.action_dim, dtype=np.float32)
         _, _, _, _, info = env.step(zero, zero)
-        comps[level] = info["reward_components_a"]
-    assert abs(comps[4]["centre"]) < abs(comps[0]["centre"])
-    assert abs(comps[4]["alive"]) < abs(comps[0]["alive"])
+        comps[scale] = info["reward_components_a"]
+    assert abs(comps[0.2]["centre"]) < abs(comps[1.0]["centre"])
+    assert abs(comps[0.2]["alive"]) < abs(comps[1.0]["alive"])

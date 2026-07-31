@@ -1,13 +1,13 @@
 # PPO on sumo-1. Defaults are tuned for a DGX Spark (GB10, 122 GB unified memory).
 #
 # A yaml value of `null` under env.arena / env.reward_weights / env.termination
-# means "keep whatever the registry's curriculum chose for this level", so a run
-# can change one knob without restating the whole schedule.
+# means "keep whatever the registry chose", so a run can change one knob without
+# restating everything else.
 
-# Which curriculum level ppo_sumo.py trains. Declared here rather than added on
-# the command line with `+level=`, so `level=2` works like every other override.
-level: 0
+# Optional warm start from an existing policy, and the checkpoints/ subdirectory
+# this run writes to. There is no `level`: see examples/ppo_sumo.py.
 init_checkpoint: null
+run_name: sumo1
 
 env:
   name: sumo-1
@@ -23,11 +23,13 @@ env:
   njmax: 600
 
   arena:
+    # opponent: who drives side B. "self" is the real game; "zero" is a passive
+    # dummy, only for bootstrapping standing on a fresh robot.
+    opponent: null
+    opponent_loses_by: null
     ring_radius: null
     platform_height: null
     spawn_frac: null
-    opponent: null
-    opponent_loses_by: null
     shaping_scale: null
     action_scale: null
     frame_skip: null
@@ -86,10 +88,6 @@ logger:
   eval_envs: 64           # duels per evaluation
   eval_steps: 750         # cap; equals one full episode at the default termination
 
-curriculum:
-  levels: [0, 1]
-  frames_per_level: [10_000_000, 20_000_000]
-  warm_start: true
 
 hydra:
   job:

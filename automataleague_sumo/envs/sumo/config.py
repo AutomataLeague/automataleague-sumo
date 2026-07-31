@@ -11,20 +11,27 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-# How the opponent side is driven. Only "zero" is implemented in Phase B; the
-# rest are wired up with the self-play machinery in Phase C.
-OPPONENT_MODES: tuple[str, ...] = ("zero", "frozen", "self", "pool")
+# Who drives side B. This is not a difficulty setting: under self-play the
+# opponent's strength tracks the policy's own, which is the whole reason this
+# task needs no authored difficulty ladder.
+#   "zero"  - a passive dummy. Only for bootstrapping standing on a fresh robot.
+#   "self"  - the current policy drives both sides. The real game.
+#   "pool"  - sampled from a growing set of past snapshots plus the current
+#             policy, so improvement is monotone instead of a cycle in which the
+#             policy beats its present self by exploiting a hole it then trains
+#             away. This is where "stronger and growing" actually comes from.
+OPPONENT_MODES: tuple[str, ...] = ("zero", "self", "pool")
 
-# Which loss conditions count against side B. A zero-action dummy collapses on
-# its own in about 1.2 s (measured in Phase B: ~0.45 m of sag against a 0.431 m
-# fall threshold), so with the ordinary rules the learner is handed a free win
-# roughly 60 steps into every early-curriculum episode and never has to act.
-#   "none"     - side B cannot lose; only the learner's own loss ends the duel.
-#                Level 0 is then purely "stay upright and centred".
-#   "ring_out" - side B loses only by leaving the ring or the platform, which is
-#                exactly the level 1 task: put the dummy out. Its own collapse is
-#                ignored, so the learner has to actually push.
-#   "any"      - the ordinary rules: a real contestant that can also be put down.
+# Which loss conditions count against side B. Only relevant to the passive dummy
+# used for bootstrapping: it collapses on its own in about 1.2 s (~0.45 m of sag
+# against a 0.431 m fall threshold), so under the ordinary rules the learner is
+# handed a free win roughly 60 steps in and never has to act.
+#   "none"     - side B cannot lose; only the learner's own loss ends the duel,
+#                which makes the bootstrap purely "stay upright".
+#   "ring_out" - side B loses only by leaving the ring or the platform, so the
+#                learner has to actually push it out rather than wait.
+#   "any"      - the ordinary rules, and the only legal value against a real
+#                opponent.
 OPPONENT_LOSS_MODES: tuple[str, ...] = ("none", "ring_out", "any")
 
 
@@ -43,20 +50,22 @@ class SumoConfig:
     # facing each other along the x axis.
     spawn_frac: float = 0.6
 
-    # --- curriculum ---
-    level: int = 0
-    opponent: str = "zero"
+    # --- who drives side B ---
+    # NOT a difficulty level. The difficulty of a competitive game is the
+    # opponent, and under self-play it grows with the policy on its own. This
+    # selects who is at the other end of the duel, nothing more.
+    opponent: str = "self"
     # See OPPONENT_LOSS_MODES. Only meaningful while side B is a dummy; a real
     # opponent must play by the ordinary rules, which __post_init__ enforces.
     opponent_loses_by: str = "any"
-    # Multiplies every shaping term (not the sparse win term), so the reward
-    # anneals toward the true win condition as the curriculum advances.
+    # Multiplies every shaping term, never the sparse win term. Lower means the
+    # policy optimizes closer to the actual win condition.
     shaping_scale: float = 1.0
 
     # --- action range: q_target = home + action_scale * action, action in [-1,1].
-    # None => use the robot's default. Refined per level by tools/measure_reach.py
-    # in Phase C, following the parkour lesson that capability must be measured
-    # and must have margin, not be guessed. ---
+    # None => use the robot's default. tools/measure_reach.py must MEASURE this,
+    # following the parkour lesson that capability must have margin over what the
+    # task demands and must never be guessed. ---
     action_scale: float | None = None
 
     # --- control rate: model timestep is 0.004 s, so frame_skip 5 => 50 Hz ---
@@ -67,12 +76,12 @@ class SumoConfig:
     # `push_interval_steps` control steps with a magnitude drawn from
     # U(0, push_speed) in m/s and a uniformly random heading.
     #
-    # Without them a balance level has no disturbance in it at all: the opponent
-    # never makes contact, and the only variation inside an episode comes from the
-    # reset. The cheapest solution is then one fixed stance, and that is what gets
-    # learned. Measured on the first level 0 policy, which held its pose for a full
-    # 750-step episode: a 0.5 m/s shove toppled it in 6 of 6 seeds within 57 steps.
-    # Both are 0 by default so a level opts in.
+    # Without them, bootstrapping against a passive dummy has no disturbance in it
+    # at all: the opponent never makes contact and the only variation inside an
+    # episode comes from the reset. The cheapest solution is then one fixed stance,
+    # and that is what gets learned. Measured on the first such policy, which held
+    # its pose for a full 750-step episode: a 0.5 m/s shove toppled it in 6 of 6
+    # seeds within 57 steps. Both default to 0 so a config opts in.
     push_interval_steps: int = 0
     push_speed: float = 0.0
 
@@ -108,7 +117,7 @@ class SumoConfig:
                 f"opponent_loses_by='{self.opponent_loses_by}' handicaps side B, but "
                 f"opponent='{self.opponent}' is a real policy-driven contestant, not a "
                 f"dummy. A duel where one side plays by different rules is not the game "
-                f"being evaluated — use opponent_loses_by='any' outside the dummy levels."
+                f"being evaluated. Use opponent_loses_by='any' against a real opponent."
             )
         if self.push_interval_steps < 0:
             raise ValueError(

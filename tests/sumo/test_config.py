@@ -13,8 +13,16 @@ def test_defaults():
     assert cfg.ring_radius == 1.5
     assert cfg.platform_height == 0.3
     assert cfg.spawn_frac == 0.6
-    assert cfg.opponent == "zero"
+    # The default opponent is the real game. A default of "zero" would mean every
+    # unqualified run silently trains against a corpse.
+    assert cfg.opponent == "self"
     assert cfg.frame_skip == 5
+
+
+def test_there_is_no_difficulty_level_field():
+    """The opponent is the difficulty and it grows on its own under self-play. A
+    `level` field would be a second difficulty knob fighting the first."""
+    assert not hasattr(SumoConfig(), "level")
 
 
 def test_spawn_radius_is_inside_the_ring():
@@ -86,6 +94,12 @@ def test_unknown_opponent_mode_raises():
 def test_all_opponent_modes_are_accepted():
     for mode in OPPONENT_MODES:
         assert SumoConfig(opponent=mode).opponent == mode
+
+
+def test_the_opponent_modes_describe_who_plays_not_how_hard_it_is():
+    """"frozen" was a curriculum rung; with the ladder gone the growing opponent
+    is the pool, so the modes are only: nobody, yourself, or your own history."""
+    assert set(OPPONENT_MODES) == {"zero", "self", "pool"}
 
 
 def test_reward_and_termination_defaults():

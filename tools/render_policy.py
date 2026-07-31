@@ -21,10 +21,9 @@ import torch
 from omegaconf import OmegaConf
 from torchrl.envs import ExplorationType, set_exploration_type
 
-from automataleague_sumo.envs.registry import get_env_spec
-from automataleague_sumo.envs.sumo.config import RewardConfig, TerminationConfig
 from automataleague_sumo.envs.sumo.sumo_cpu import SumoEnvCPU
 from automataleague_sumo.robots import get_robot
+from automataleague_sumo.training.env import configs_from_cfg
 from automataleague_sumo.training.models import build_actor
 
 
@@ -38,8 +37,8 @@ def parse_args():
     p.add_argument("--fps", type=int, default=50)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--both-sides", action="store_true",
-                   help="drive BOTH robots with this policy, even at a level whose "
-                        "opponent is normally a dummy. The observation carries no "
+                   help="drive BOTH robots with this policy, even when the "
+                        "opponent is a dummy. The observation carries no "
                         "side identity, so a policy trained on side A should work "
                         "unchanged on side B — this is how to check that it does.")
     p.add_argument("--stochastic", action="store_true",
@@ -53,27 +52,16 @@ def main():
     args = parse_args()
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     cfg = OmegaConf.create(state["config"])
-    level = int(state.get("level", 0))
 
     robot = get_robot(cfg.env.robot)
     actor = build_actor(cfg, robot, torch.device("cpu"))
     actor.load_state_dict(state["actor_state_dict"])
     actor.eval()
 
-    # Rebuild exactly the configuration this checkpoint trained under, weight
-    # overrides included — rendering it under the shipped defaults would show the
-    # policy being judged by a reward it never saw.
-    sumo_cfg = get_env_spec(cfg.env.name).config(level)
-    rc, tc = RewardConfig(), TerminationConfig()
-    for group, target in ((getattr(cfg.env, "reward_weights", None), rc),
-                          (getattr(cfg.env, "termination", None), tc)):
-        if group is None:
-            continue
-        for key in vars(target):
-            value = getattr(group, key, None)
-            if value is not None:
-                setattr(target, key, type(getattr(target, key))(value))
-
+    # Rebuild exactly the configuration this checkpoint trained under, arena and
+    # weight overrides included. Rendering it under the shipped defaults would show
+    # the policy in a duel it never trained in and judged by a reward it never saw.
+    sumo_cfg, rc, tc = configs_from_cfg(cfg)
     env = SumoEnvCPU(robot=cfg.env.robot, cfg=sumo_cfg, reward_cfg=rc, term_cfg=tc)
     both_sides = args.both_sides or sumo_cfg.opponent == "self"
     mode = ExplorationType.RANDOM if args.stochastic else ExplorationType.DETERMINISTIC

@@ -40,19 +40,18 @@ def outcome_rates(codes: torch.Tensor) -> dict[str, float]:
             for code, name in _OUTCOME_NAMES.items()}
 
 
-def _save(path, actor, critic, collected_frames, cfg, level):
+def _save(path, actor, critic, collected_frames, cfg):
     torch.save({
         "actor_state_dict": actor.state_dict(),
         "critic_state_dict": critic.state_dict(),
         "collected_frames": collected_frames,
-        "level": level,
         "config": dict(cfg),
     }, path)
 
 
-def run_ppo(cfg, *, level, total_frames, init_ckpt=None, run_name="ppo",
+def run_ppo(cfg, *, total_frames, init_ckpt=None, run_name="ppo",
             checkpoints_root="checkpoints") -> str:
-    """Train one PPO run at ``level`` for ``total_frames``; return the best checkpoint."""
+    """Train one PPO run for ``total_frames``; return the best checkpoint path."""
     device = torch.device(
         cfg.network.device or ("cuda:0" if torch.cuda.is_available() else "cpu"))
     checkpoint_dir = os.path.join(checkpoints_root, run_name)
@@ -74,7 +73,7 @@ def run_ppo(cfg, *, level, total_frames, init_ckpt=None, run_name="ppo",
             },
         )
 
-    train_env, eval_env = make_environment(cfg, level)
+    train_env, eval_env = make_environment(cfg)
     actor, critic = make_ppo_models(cfg, train_env, device)
 
     if init_ckpt:
@@ -198,11 +197,11 @@ def run_ppo(cfg, *, level, total_frames, init_ckpt=None, run_name="ppo",
             if score > best_score:
                 best_score = score
                 _save(os.path.join(checkpoint_dir, "ppo_best.pt"),
-                      actor, critic, collected_frames, cfg, level)
+                      actor, critic, collected_frames, cfg)
                 torchrl_logger.info(f"New best policy (score={score:.3f}) -> ppo_best.pt")
             metrics["eval/best_score"] = best_score
             _save(os.path.join(checkpoint_dir, f"ppo_eval_{collected_frames}.pt"),
-                  actor, critic, collected_frames, cfg, level)
+                  actor, critic, collected_frames, cfg)
 
         if logger is not None:
             log_metrics(logger, metrics, collected_frames)
@@ -213,7 +212,7 @@ def run_ppo(cfg, *, level, total_frames, init_ckpt=None, run_name="ppo",
             fh.write(json.dumps({"collected_frames": collected_frames, **metrics}) + "\n")
 
     _save(os.path.join(checkpoint_dir, "ppo_final.pt"),
-          actor, critic, collected_frames, cfg, level)
+          actor, critic, collected_frames, cfg)
     torchrl_logger.info(f"Training took {time.time() - start_time:.1f}s")
     if logger is not None and cfg.logger.backend == "wandb":
         import wandb
@@ -260,8 +259,8 @@ def _evaluate(actor, eval_env, cfg) -> dict[str, float]:
         metrics["eval/final_opp_radius"] = rollout["next", "opp_radius"].mean().item()
 
     # Credit pushing the opponent out only where the opponent can actually be put
-    # out. At a level whose dummy cannot lose, its final radius is decided by how
-    # it happens to topple, so including it would rank checkpoints partly on a
+    # out. Against a dummy that cannot lose, its final radius is decided by how it
+    # happens to topple, so including it would rank checkpoints partly on a
     # quantity the learner has no influence over — noise worth 9 to 20 points
     # against an episode length of 50 to 100.
     scores_pushing = eval_env.base_env.cfg.opponent_loses_by != "none"

@@ -80,10 +80,10 @@ def side_lost(
 def _filter_opponent_loss(lost: Tensor, code: Tensor, mode: str) -> Tensor:
     """Restrict which loss conditions actually count against side B.
 
-    Early curriculum levels face a zero-action dummy, which collapses under its
-    own weight in about 1.2 s. Under the ordinary rules that is a free win for
-    the learner roughly 60 steps into every episode, so the dummy's eligibility
-    to lose is a per-level choice. See ``config.OPPONENT_LOSS_MODES``.
+    A zero-action bootstrap dummy collapses under its own weight in about 1.2 s.
+    Under the ordinary rules that is a free win for the learner roughly 60 steps
+    into every episode, so the dummy's eligibility to lose is configurable. See
+    ``config.OPPONENT_LOSS_MODES``. Against a real opponent this is always "any".
     """
     if mode == "any":
         return lost

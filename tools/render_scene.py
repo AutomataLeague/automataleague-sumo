@@ -7,7 +7,7 @@ episode actually resets to. A nonzero ``--settle`` instead runs that many
 passive physics steps first, which is useful for checking solver stability but
 is not a design preview — the G1's PD-held stance pitches forward well past a
 "slight crouch" over a few hundred steps of unlearned balance, since standing
-is what curriculum level 0 is for, not something the home pose guarantees on
+is what the standing bootstrap is for, not something the home pose guarantees on
 its own.
 """
 

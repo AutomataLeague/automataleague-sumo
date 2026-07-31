@@ -9,49 +9,46 @@ def test_sumo_1_is_registered():
     assert "sumo-1" in ENVIRONMENTS
     spec = get_env_spec("sumo-1")
     assert spec.season == 0
-    assert spec.n_levels == 5
 
 
-def test_per_level_tuples_cover_every_level():
+def test_the_registry_carries_no_difficulty_ladder():
+    """The opponent IS the difficulty, and under self-play it grows with the
+    policy. A second, authored difficulty knob would fight the first, and this
+    repository has already been bitten four times by settings transplanted from
+    the parkour sibling where difficulty genuinely is a property of the world."""
     spec = get_env_spec("sumo-1")
-    for name in ("action_scale_by_level", "shaping_scale_by_level", "opponent_by_level"):
-        assert len(getattr(spec, name)) == spec.n_levels, name
+    banned = [f for f in vars(spec) if "level" in f or "by_level" in f]
+    assert banned == [], f"a difficulty ladder came back: {banned}"
+    assert not hasattr(spec, "n_levels")
 
 
-def test_shaping_anneals_downward_across_the_curriculum():
-    scales = get_env_spec("sumo-1").shaping_scale_by_level
-    assert scales[0] == 1.0
-    assert scales[-1] < scales[0]
-    assert all(b <= a for a, b in zip(scales, scales[1:])), "shaping must not increase"
-
-
-def test_opponent_progression_matches_the_curriculum():
-    assert get_env_spec("sumo-1").opponent_by_level == (
-        "zero", "zero", "frozen", "self", "pool")
-
-
-def test_config_carries_the_level_settings():
+def test_config_carries_the_season_defaults():
     spec = get_env_spec("sumo-1")
-    cfg = spec.config(3)
-    assert cfg.level == 3
-    assert cfg.opponent == spec.opponent_by_level[3]
-    assert cfg.shaping_scale == spec.shaping_scale_by_level[3]
-    assert cfg.action_scale == spec.action_scale_by_level[3]
+    cfg = spec.config()
     assert cfg.ring_radius == spec.ring_radius
+    assert cfg.action_scale == spec.action_scale
+    assert cfg.push_speed == spec.push_speed
+    assert cfg.push_interval_steps == spec.push_interval_steps
 
 
-def test_out_of_range_level_raises():
-    with pytest.raises(ValueError, match="out of range"):
-        get_env_spec("sumo-1").config(5)
-    with pytest.raises(ValueError, match="out of range"):
-        get_env_spec("sumo-1").config(-1)
+def test_the_default_opponent_is_the_real_game():
+    """Self-play is the task. A default of "zero" would mean every unqualified
+    run silently trains against a corpse."""
+    assert get_env_spec("sumo-1").config().opponent == "self"
 
 
 def test_overrides_are_applied_and_validated():
-    cfg = get_env_spec("sumo-1").config(0, ring_radius=2.0)
+    cfg = get_env_spec("sumo-1").config(ring_radius=2.0)
     assert cfg.ring_radius == 2.0
     with pytest.raises(ValueError, match="Unknown SumoConfig field"):
-        get_env_spec("sumo-1").config(0, radius=2.0)
+        get_env_spec("sumo-1").config(radius=2.0)
+
+
+def test_the_bootstrap_opponent_is_reachable_through_an_override():
+    """Standing still has to be trainable on a fresh robot, just not as a level."""
+    cfg = get_env_spec("sumo-1").config(opponent="zero", opponent_loses_by="none")
+    assert cfg.opponent == "zero"
+    assert cfg.opponent_loses_by == "none"
 
 
 def test_unknown_env_id_raises():
@@ -66,11 +63,11 @@ def test_list_environments_filters_by_season():
 
 
 def test_make_env_builds_a_working_cpu_env():
-    env = make_env("sumo-1", level=0, backend="cpu")
+    env = make_env("sumo-1", backend="cpu", ring_radius=1.25)
     assert isinstance(env, SumoEnvCPU)
-    # Pin the level actually reached the config, not just "some env was built" —
-    # otherwise a make_env that silently ignores `level` still passes this test.
-    assert env.cfg.level == 0
+    # Pin that an override actually reached the config, not just "some env was
+    # built" — otherwise a make_env that silently drops cfg_overrides still passes.
+    assert env.cfg.ring_radius == 1.25
     obs_a, obs_b = env.reset(seed=0)
     assert obs_a.shape == (env.observation_dim,)
     assert obs_b.shape == obs_a.shape
@@ -89,15 +86,16 @@ def test_make_env_forwards_robot_and_opponent_robot_without_crossing_them(monkey
 
     monkeypatch.setattr(
         "automataleague_sumo.envs.sumo.sumo_cpu.SumoEnvCPU", FakeEnv)
-    make_env("sumo-1", robot="g1", opponent_robot="other-bot", level=0, backend="cpu")
+    make_env("sumo-1", robot="g1", opponent_robot="other-bot", backend="cpu")
     assert captured["robot"] == "g1"
     assert captured["opponent_robot"] == "other-bot"
 
 
-def test_make_env_defaults_to_the_hardest_level():
-    spec = get_env_spec("sumo-1")
-    env = make_env("sumo-1", backend="cpu")
-    assert env.cfg.level == spec.n_levels - 1
+def test_make_env_rejects_an_unknown_config_field():
+    """cfg_overrides go to SumoConfig, so a typo must fail rather than be
+    swallowed as a backend argument."""
+    with pytest.raises(ValueError, match="Unknown SumoConfig field"):
+        make_env("sumo-1", backend="cpu", ring_radiuss=2.0)
 
 
 def test_importing_the_registry_does_not_import_mujoco_warp():

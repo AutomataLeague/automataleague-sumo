@@ -1,7 +1,13 @@
-"""PPO on a single sumo-1 curriculum level.
+"""PPO on sumo-1.
 
-    uv run python examples/ppo_sumo.py level=0
-    uv run python examples/ppo_sumo.py level=3 env.num_envs=4096 logger.backend=""
+    uv run python examples/ppo_sumo.py
+    uv run python examples/ppo_sumo.py env.arena.opponent=zero      # bootstrap standing
+    uv run python examples/ppo_sumo.py env.num_envs=4096 logger.backend=""
+
+There is no curriculum entry point and no `level` argument. The difficulty of a
+competitive game is the opponent, and under self-play it grows with the policy,
+so there is nothing to schedule. To start from an existing policy, pass
+`init_checkpoint=...`.
 """
 
 import os
@@ -22,13 +28,11 @@ def main(cfg):
     torch.manual_seed(cfg.env.seed)
     np.random.seed(cfg.env.seed)
 
-    level = int(cfg.get("level", 0))
     best = run_ppo(
         cfg,
-        level=level,
         total_frames=cfg.collector.total_frames,
         init_ckpt=cfg.get("init_checkpoint", None),
-        run_name=f"sumo1_L{level}",
+        run_name=cfg.get("run_name", "sumo1"),
     )
     print(f"best checkpoint: {best}")
 

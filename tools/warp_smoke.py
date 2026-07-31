@@ -1,7 +1,7 @@
 """Validate and benchmark the batched Warp backend before spending GPU hours.
 
-    uv run python tools/warp_smoke.py --num-envs 2048 --level 0
-    uv run python tools/warp_smoke.py --num-envs 4096 --level 3 --steps 300
+    uv run python tools/warp_smoke.py --num-envs 2048
+    uv run python tools/warp_smoke.py --num-envs 4096 --opponent zero --steps 300
 
 Checks, in order of how expensive it is to discover them late:
 
@@ -34,7 +34,8 @@ def parse_args():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--env", default="sumo-1")
     p.add_argument("--robot", default="g1")
-    p.add_argument("--level", type=int, default=0)
+    p.add_argument("--opponent", default="self",
+                   help="who drives side B: self (the real game) or zero (a dummy)")
     p.add_argument("--num-envs", type=int, default=1024)
     p.add_argument("--steps", type=int, default=200)
     p.add_argument("--warmup", type=int, default=20)
@@ -50,11 +51,14 @@ def parse_args():
     return p.parse_args()
 
 
-def build(args, level=None, num_envs=None, seed=0):
+def build(args, num_envs=None, seed=0):
     from automataleague_sumo.envs.sumo.sumo_warp import SumoEnvWarp
 
     torch.manual_seed(seed)
-    cfg = get_env_spec(args.env).config(args.level if level is None else level)
+    overrides = {"opponent": args.opponent}
+    if args.opponent == "zero":
+        overrides["opponent_loses_by"] = "none"
+    cfg = get_env_spec(args.env).config(**overrides)
     return SumoEnvWarp(
         robot=args.robot, num_envs=num_envs or args.num_envs, device=args.device,
         cfg=cfg, nconmax=args.nconmax, njmax=args.njmax,
@@ -72,9 +76,9 @@ def check_symmetry(args) -> None:
     """
     env = build(args, num_envs=8, seed=0)
     if not env.two_sided:
-        # A dummy-opponent level drives side B at zero, so force the symmetric case.
-        print("  (level uses a dummy opponent; symmetry is checked with both sides "
-              "driven identically, which is the same physics question)")
+        # A dummy opponent drives side B at zero, so force the symmetric case.
+        print("  (dummy opponent; symmetry is checked with both sides driven "
+              "identically, which is the same physics question)")
 
     # Deterministic, noise-free start: this check is about index wiring, and spawn
     # noise would mask a real crossing behind a plausible-looking difference.
@@ -134,8 +138,8 @@ def check_symmetry(args) -> None:
 
 def main():
     args = parse_args()
-    print(f"building {args.env} L{args.level} with {args.num_envs} duels "
-          f"on {args.device} ...")
+    print(f"building {args.env} (opponent={args.opponent!r}) with {args.num_envs} "
+          f"duels on {args.device} ...")
     t0 = time.time()
     env = build(args)
     print(f"  built in {time.time() - t0:.1f}s "

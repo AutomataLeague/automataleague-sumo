@@ -34,7 +34,7 @@ def survival_margin(
     Read the sign accordingly. Positive is a proof that one more step of survival
     pays. Negative is a warning, not a proof of the opposite: ``engage`` can add
     up to ``rc.engage`` per step on top, so the realised margin can still be
-    positive. On the first level 0 run the floor at the 0.9 m spawn radius was
+    positive. On the first standing run the floor at the 0.9 m spawn radius was
     -0.130 and the realised margin including a favourable ``engage`` was about
     -0.080 — still negative, and the policy responded exactly as asked, creeping
     inward from 0.98 m to 0.40 m while its episode length stayed pinned near 60
@@ -59,7 +59,7 @@ def break_even_radius(rc: RewardConfig, ring_radius: float) -> float:
     """Radius where the centre penalty exactly cancels the alive bonus.
 
     Inside it, surviving pays; outside it, dying sooner scores better. Compare
-    this against ``SumoConfig.spawn_radius``: if the spawn is outside, the level
+    this against ``SumoConfig.spawn_radius``: if the spawn is outside, the reward
     is asking the policy to move before it asks it to survive.
     """
     if rc.center <= 0:

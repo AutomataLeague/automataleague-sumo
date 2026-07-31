@@ -85,11 +85,12 @@ class SumoEnvWarp(EnvBase):
         # Both sides learn only under true self-play; otherwise side B is a dummy
         # driven by the env and never appears in the policy's batch.
         self._two_sided = self.cfg.opponent == "self"
-        if self.cfg.opponent in ("frozen", "pool"):
+        if self.cfg.opponent == "pool":
             raise NotImplementedError(
-                f"opponent='{self.cfg.opponent}' needs the frozen-snapshot / league "
-                f"machinery. Implemented so far: 'zero' (dummy) and 'self' (naive "
-                f"self-play)."
+                "opponent='pool' needs the snapshot-pool machinery: a growing set "
+                "of past policies to sample side B from. That pool is the only "
+                "difficulty mechanism this task has, so it is the next thing to "
+                "build. Implemented so far: 'zero' (bootstrap dummy) and 'self'."
             )
         self._num_rows = self._num_worlds * (2 if self._two_sided else 1)
 

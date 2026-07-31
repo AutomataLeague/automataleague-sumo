@@ -1,13 +1,20 @@
 """Environment registry — named, versioned task environments.
 
-An ENV is a registry id (``"sumo-1"``) mapped to an ``EnvSpec``: a default
-``SumoConfig`` factory over the shared ``envs/sumo`` engine, plus season metadata
-and the per-level curriculum schedule. Users import an env by id:
+An ENV is a registry id (``"sumo-1"``) mapped to an ``EnvSpec``: the default
+``SumoConfig`` for that season's arena, over the shared ``envs/sumo`` engine.
+Users import an env by id:
 
     from automataleague_sumo import make_env, list_environments
-    env = make_env("sumo-1", robot="g1", level=0, backend="cpu")
+    env = make_env("sumo-1", robot="g1", backend="cpu")
 
 Add a future season by adding one ``EnvSpec`` entry; the engine is shared.
+
+There is deliberately no difficulty ladder. In a competitive game the difficulty
+IS the opponent, and under self-play the opponent improves exactly as fast as the
+policy does, so a hand-authored schedule of environment difficulty is a second
+difficulty knob fighting the first. That structure came from the parkour sibling,
+where difficulty genuinely is a property of the world (a taller obstacle) rather
+than of who you are fighting.
 """
 
 from __future__ import annotations
@@ -27,32 +34,21 @@ class EnvSpec:
     season: int
     description: str
     ring_radius: float
-    n_levels: int                                # difficulty levels 0..n_levels-1
-    action_scale_by_level: tuple[float, ...]     # q-target scale (radians)
-    shaping_scale_by_level: tuple[float, ...]    # anneals the shaping terms away
-    opponent_by_level: tuple[str, ...]           # see config.OPPONENT_MODES
-    opponent_loses_by_level: tuple[str, ...]     # see config.OPPONENT_LOSS_MODES
-    push_speed_by_level: tuple[float, ...]       # m/s, unobserved shove magnitude
-    push_interval_by_level: tuple[int, ...]      # control steps between shoves
+    action_scale: float          # q-target scale in radians
+    push_speed: float            # m/s, unobserved shove magnitude
+    push_interval_steps: int     # control steps between shoves
 
-    def config(self, level: int, **overrides) -> SumoConfig:
-        """Default ``SumoConfig`` for this env at ``level``, before hydra overrides."""
-        if not 0 <= level < self.n_levels:
-            raise ValueError(
-                f"{self.env_id}: level {level} out of range 0..{self.n_levels - 1}")
+    def config(self, **overrides) -> SumoConfig:
+        """Default ``SumoConfig`` for this env, before any hydra overrides."""
         known = {f.name for f in fields(SumoConfig)}
-        for k in overrides:
-            if k not in known:
-                raise ValueError(f"Unknown SumoConfig field '{k}'")
+        for key in overrides:
+            if key not in known:
+                raise ValueError(f"Unknown SumoConfig field '{key}'")
         defaults = dict(
             ring_radius=self.ring_radius,
-            level=level,
-            opponent=self.opponent_by_level[level],
-            opponent_loses_by=self.opponent_loses_by_level[level],
-            push_speed=self.push_speed_by_level[level],
-            push_interval_steps=self.push_interval_by_level[level],
-            shaping_scale=self.shaping_scale_by_level[level],
-            action_scale=self.action_scale_by_level[level],
+            action_scale=self.action_scale,
+            push_speed=self.push_speed,
+            push_interval_steps=self.push_interval_steps,
         )
         # Construct once with the overrides merged in, so SumoConfig.__post_init__
         # validates the final combination rather than the pre-override one.
@@ -64,31 +60,20 @@ ENVIRONMENTS: dict[str, EnvSpec] = {
         env_id="sumo-1",
         season=0,
         description=(
-            "Season 0 — raised circular dohyo, two humanoids, 5 curriculum levels "
-            "from balance to league self-play."),
+            "Season 0 — raised circular dohyo, two humanoids, self-play against a "
+            "growing pool of past policies."),
         ring_radius=1.5,
-        n_levels=5,
-        # Provisional and uniform. tools/measure_reach.py sets the real schedule in
-        # Phase C by measuring step length and push impulse against action_scale.
-        # The parkour lesson is that this number must be measured with margin over
-        # what the task demands, never guessed.
-        action_scale_by_level=(0.5, 0.5, 0.5, 0.5, 0.5),
-        # L0 balance, L1 push a dummy, L2 beat a frozen L1 snapshot, L3 naive
-        # self-play, L4 league play against a checkpoint pool.
-        shaping_scale_by_level=(1.0, 1.0, 0.7, 0.4, 0.2),
-        opponent_by_level=("zero", "zero", "frozen", "self", "pool"),
-        # A zero-action dummy collapses on its own in ~1.2 s, so at L0 it cannot
-        # lose at all (the task is purely balance) and at L1 it loses only by
-        # being put out (the task is purely pushing). From L2 the opponent is a
-        # real policy and plays by the ordinary rules.
-        opponent_loses_by_level=("none", "ring_out", "any", "any", "any"),
-        # Balance is only balance if something disturbs it. Level 0 with no
-        # perturbation taught a held pose: the resulting policy stood for a full
-        # 750-step episode and fell to a 0.5 m/s shove in 6 of 6 seeds. The
-        # fighting levels supply their own disturbance — an opponent — so the
-        # scripted shoves taper off rather than compounding with real contact.
-        push_speed_by_level=(1.0, 1.0, 0.5, 0.5, 0.5),
-        push_interval_by_level=(75, 75, 150, 150, 150),
+        # Provisional. tools/measure_reach.py must MEASURE this: the parkour lesson
+        # is that a robot's capability needs margin over what the task demands, and
+        # an action scale that is quietly too small reads as an exploration plateau.
+        action_scale=0.5,
+        # Unobserved shoves. Balance without a disturbance is a held pose: the first
+        # policy trained without these survived a full 750-step episode and still
+        # fell to a 0.5 m/s shove in 6 of 6 seeds. Retraining with them gave 6/6 at
+        # 1.0 m/s. Two policies wrestling supply their own disturbance, but these
+        # cost nothing and keep the floor honest.
+        push_speed=1.0,
+        push_interval_steps=75,
     ),
 }
 
@@ -111,7 +96,6 @@ def make_env(
     env_id: str,
     robot: str = "g1",
     opponent_robot: str | None = None,
-    level: int | None = None,
     backend: str = "cpu",
     num_envs: int | None = None,
     reward_cfg: RewardConfig | None = None,
@@ -127,16 +111,16 @@ def make_env(
     single renderable duel and rejects any explicit ``num_envs`` rather than
     silently ignoring it.
 
-    ``cfg_overrides`` are ``SumoConfig`` fields and apply to every backend.
+    ``cfg_overrides`` are ``SumoConfig`` fields and apply to every backend, which
+    is how a run selects an opponent (``opponent="zero"`` to bootstrap standing
+    against a dummy, ``"self"`` for the real game).
     ``backend_kwargs`` are the chosen backend's own constructor arguments
     (``device``, ``nconmax``, ``njmax`` for Warp); keeping the two separate is
     what makes an unknown ``SumoConfig`` field an error instead of silently
     becoming a backend argument, or the reverse.
     """
     backend_kwargs = dict(backend_kwargs or {})
-    spec = get_env_spec(env_id)
-    lvl = spec.n_levels - 1 if level is None else int(level)
-    cfg = spec.config(lvl, **cfg_overrides)
+    cfg = get_env_spec(env_id).config(**cfg_overrides)
 
     if backend == "cpu":
         if backend_kwargs:

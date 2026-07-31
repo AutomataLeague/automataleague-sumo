@@ -26,32 +26,33 @@ from automataleague_sumo.envs.sumo.sumo_warp import SumoEnvWarp  # noqa: E402
 N = 8
 
 
-def _env(level):
+def _env(opponent):
+    extra = {"opponent_loses_by": "none"} if opponent == "zero" else {}
     return SumoEnvWarp(robot="g1", num_envs=N, device="cuda:0",
-                       cfg=get_env_spec("sumo-1").config(level))
+                       cfg=get_env_spec("sumo-1").config(opponent=opponent, **extra))
 
 
 @pytest.fixture(scope="module")
 def dummy_env():
-    """Level 0: a zero-action dummy opponent, so the policy batch is [N]."""
-    return _env(0)
+    """A zero-action dummy opponent, so the policy batch is [N]."""
+    return _env("zero")
 
 
 @pytest.fixture(scope="module")
 def selfplay_env():
-    """Level 3: naive self-play, so the policy batch is [2N]."""
-    return _env(3)
+    """Self-play, so the policy batch is [2N]."""
+    return _env("self")
 
 
 # ------------------------------------------------------------------ batch shape
 
-def test_dummy_level_exposes_one_row_per_world(dummy_env):
+def test_a_dummy_opponent_exposes_one_row_per_world(dummy_env):
     assert dummy_env.num_worlds == N
     assert dummy_env.batch_size[0] == N
     assert not dummy_env.two_sided
 
 
-def test_selfplay_level_exposes_two_rows_per_world(selfplay_env):
+def test_selfplay_exposes_two_rows_per_world(selfplay_env):
     """The [2N] flattening is the whole self-play mechanism: side B's rows are
     ordinary policy rows, so one shared network is both wrestlers."""
     assert selfplay_env.num_worlds == N
@@ -102,7 +103,7 @@ def test_contacts_stay_inside_the_allocated_buffer(dummy_env):
 # ------------------------------------------------------------------- wiring
 
 def test_side_b_is_held_at_home_under_a_dummy_opponent(dummy_env):
-    """A dummy level must ignore whatever the policy would have said for side B.
+    """A dummy opponent must ignore whatever the policy said for side B.
 
     Asserted through the ctrl buffer rather than through a trajectory, because a
     trajectory difference could equally come from noise: this pins the exact

@@ -1,4 +1,4 @@
-"""The per-level handicap that stops a collapsing dummy from handing out free wins.
+"""The handicap that stops a collapsing bootstrap dummy handing out free wins.
 
 Every assertion here was checked against the bug it is meant to catch: each test
 was run with the corresponding line of `_filter_opponent_loss` removed or with the
@@ -74,18 +74,18 @@ def test_none_mode_ignores_a_collapsed_dummy():
 
     Measured in phase B, a zero-action G1 sags ~0.45 m against a 0.431 m fall
     threshold in about 1.2 s. Under the ordinary rules that is a +10 win handed to
-    a policy that has done nothing, ~60 steps into every level 0 episode.
+    a policy that has done nothing, ~60 steps into every episode.
     """
     terminated, truncated, lost_a, lost_b, outcome = _terminate(
         UPRIGHT, COLLAPSED, "none")
-    assert not bool(lost_b), "a collapsed dummy must not count as lost at level 0"
+    assert not bool(lost_b), "a collapsed dummy must not count as lost"
     assert not bool(terminated)
     assert not bool(truncated)
     assert int(outcome) == ONGOING
 
 
 def test_none_mode_ignores_a_dummy_pushed_clean_out():
-    """Even putting it out does not score at L0 — the level is not about pushing."""
+    """Even putting it out does not score under "none": this is about standing."""
     _, _, _, lost_b, outcome = _terminate(UPRIGHT, PUSHED_OUT, "none")
     assert not bool(lost_b)
     assert int(outcome) == ONGOING
@@ -135,7 +135,7 @@ def test_any_mode_restores_the_ordinary_rules():
 
 
 def test_handicap_does_not_suppress_a_timeout_draw():
-    """A level 0 episode has to end somehow. With side B unable to lose, the only
+    """A standing episode has to end somehow. With side B unable to lose, the only
     conclusions left are the learner's own loss and the step cap."""
     tc = TerminationConfig()
     _, truncated, _, lost_b, outcome = _terminate(
@@ -158,17 +158,12 @@ def test_unknown_handicap_mode_is_rejected():
         SumoConfig(opponent="zero", opponent_loses_by="sometimes")
 
 
-def test_registry_handicaps_exactly_the_dummy_levels():
-    """The schedule must line up with the opponent schedule, entry by entry: a
-    handicap on a policy-driven level would not even construct."""
-    spec = get_env_spec("sumo-1")
-    assert len(spec.opponent_loses_by_level) == spec.n_levels
-    for level in range(spec.n_levels):
-        cfg = spec.config(level)
-        if cfg.opponent == "zero":
-            assert cfg.opponent_loses_by in ("none", "ring_out")
-        else:
-            assert cfg.opponent_loses_by == "any"
+def test_the_registry_default_gives_a_real_opponent_no_handicap():
+    """The season default is self-play, where a handicap would not even construct.
+    Pins that the default is the real game rather than a handicapped stand-in."""
+    cfg = get_env_spec("sumo-1").config()
+    assert cfg.opponent == "self"
+    assert cfg.opponent_loses_by == "any"
 
 
 # ------------------------------------------------------- row-relative outcome

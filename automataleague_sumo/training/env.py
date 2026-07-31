@@ -24,13 +24,12 @@ def log_metrics(logger, metrics, step):
         logger.log_scalar(name, value, step)
 
 
-def configs_from_cfg(cfg, level):
-    """``(SumoConfig, RewardConfig, TerminationConfig)`` for one run at ``level``.
+def configs_from_cfg(cfg):
+    """``(SumoConfig, RewardConfig, TerminationConfig)`` for one run.
 
-    The registry supplies the level's schedule (opponent mode, shaping scale,
-    action scale); the yaml may override any arena field on top. A yaml value of
-    ``null`` means "keep whatever the registry chose", so a config file does not
-    have to restate the curriculum to change one unrelated knob.
+    The registry supplies the season's defaults; the yaml may override any field
+    on top. A yaml value of ``null`` means "keep whatever the registry chose", so
+    a config file does not have to restate everything to change one knob.
     """
     overrides = {}
     if hasattr(cfg.env, "arena"):
@@ -40,7 +39,7 @@ def configs_from_cfg(cfg, level):
                 if value is not None:
                     overrides[key] = value
 
-    sumo_cfg = get_env_spec(cfg.env.name).config(int(level), **overrides)
+    sumo_cfg = get_env_spec(cfg.env.name).config(**overrides)
 
     rc = RewardConfig()
     if hasattr(cfg.env, "reward_weights"):
@@ -60,10 +59,10 @@ def configs_from_cfg(cfg, level):
     return sumo_cfg, rc, tc
 
 
-def env_maker(cfg, level, num_envs=None):
+def env_maker(cfg, num_envs=None):
     from automataleague_sumo.envs.sumo.sumo_warp import SumoEnvWarp
 
-    sumo_cfg, rc, tc = configs_from_cfg(cfg, level)
+    sumo_cfg, rc, tc = configs_from_cfg(cfg)
     return SumoEnvWarp(
         robot=cfg.env.robot,
         num_envs=int(num_envs if num_envs is not None else cfg.env.num_envs),
@@ -84,32 +83,32 @@ def apply_env_transforms(env, max_episode_steps):
     )
 
 
-def make_environment(cfg, level):
-    """Train and eval envs at ``level``.
+def make_environment(cfg):
+    """Train and eval envs.
 
     Evaluation runs the identical configuration, including the spawn noise. A
     noise-free eval would be measuring a starting state the policy never trained
     on, which is exactly how the parkour project ended up with evaluations that
     disagreed with real performance for days.
     """
-    _, _, tc = configs_from_cfg(cfg, level)
-    train_env = apply_env_transforms(env_maker(cfg, level), tc.max_episode_steps)
+    _, _, tc = configs_from_cfg(cfg)
+    train_env = apply_env_transforms(env_maker(cfg), tc.max_episode_steps)
     eval_env = apply_env_transforms(
-        env_maker(cfg, level, num_envs=int(cfg.logger.eval_envs)), tc.max_episode_steps)
+        env_maker(cfg, num_envs=int(cfg.logger.eval_envs)), tc.max_episode_steps)
     return train_env, eval_env
 
 
-def rollout_video(policy, cfg, level, max_steps=None, policy_device="cuda",
+def rollout_video(policy, cfg, max_steps=None, policy_device="cuda",
                   render_size=(720, 1280), camera="corner"):
     """Roll the deterministic policy on one CPU duel and return frames ``[T,H,W,3]``.
 
     Both sides are driven by the same policy so the clip shows the actual duel the
-    self-play batch is training on. Under a dummy-opponent level side B is held at
-    zero, matching what the Warp env does.
+    self-play batch is training on. Against a passive dummy side B is held at zero,
+    matching what the Warp env does.
     """
     from automataleague_sumo.envs.sumo.sumo_cpu import SumoEnvCPU
 
-    sumo_cfg, rc, tc = configs_from_cfg(cfg, level)
+    sumo_cfg, rc, tc = configs_from_cfg(cfg)
     env = SumoEnvCPU(robot=cfg.env.robot, cfg=sumo_cfg, reward_cfg=rc, term_cfg=tc,
                      render_size=render_size)
     both_sides = sumo_cfg.opponent == "self"
