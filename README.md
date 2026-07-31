@@ -289,6 +289,35 @@ MUJOCO_GL=egl uv run pytest              # CPU suite
 MUJOCO_GL=egl uv run pytest -m gpu       # + CUDA and mujoco-warp (spark/jetson)
 ```
 
+## Self-play result
+
+450M frames, 2048 duels, 3h24m on a DGX Spark, warm-started from the standing
+policy through a 120M-frame intermediate.
+
+| | 120M, before the stepping-out rule | 450M, after |
+| --- | --- | --- |
+| eval draws | 86% | **0.4%** |
+| eval episode length | 682 steps | **184 steps** (~3.7 s) |
+| opponent driven to | 0.53 m | **1.21 m** (rim is 1.50 m) |
+
+The robots close from the tachiai, clinch, and drive each other out. Duels are
+short and decisive, which is what a sumo bout looks like: real bouts average
+around five seconds.
+
+**`win_rate` is pinned at 0.5 and carries no information.** Every duel produces
+one winner and one loser and both rows are in the same batch, so it is a
+structural identity, not a measurement. If it ever drifts off 0.5 that is a bug
+in the row-outcome bookkeeping. The metrics that move are the final radii and the
+draw rate.
+
+**Checkpoint scoring is task-dependent, and getting it backwards is silent.** The
+score was `episode_length + 100*win_rate + 10*opp_radius`, written when the task
+was survival. Against a real opponent a long episode is a *stalemate*: that score
+selected a 140M checkpoint drawing 65% of its duels over the 450M one drawing 0%
+and driving its opponent twice as far. It now scores episode length only against
+a dummy, and against a real opponent scores how far the loser is driven and how
+decisive the duels are.
+
 ## Status
 
 Phases A and B are complete: arena, task logic, CPU duel backend, registry.

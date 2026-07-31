@@ -267,14 +267,29 @@ def _evaluate(actor, eval_env, cfg) -> dict[str, float]:
         metrics["eval/episode_length"] = float(rollout.batch_size[-1])
         metrics["eval/final_opp_radius"] = rollout["next", "opp_radius"].mean().item()
 
-    # Credit pushing the opponent out only when the opponent can actually be put
-    # out. Against a dummy, its final radius is decided by how it happens to
-    # topple, so including it would rank checkpoints partly on a quantity the
-    # learner has no influence over.
-    scores_pushing = not eval_env.base_env.cfg.dummy_opponent
-    metrics["eval/score"] = (
-        metrics["eval/episode_length"]
-        + 100.0 * metrics.get("eval/win_rate", 0.0)
-        + (10.0 * metrics["eval/final_opp_radius"] if scores_pushing else 0.0)
-    )
+    # What "better" means depends on who is at the other end of the duel, and
+    # getting this backwards silently selects the wrong checkpoint.
+    #
+    # Against a dummy the task is survival, so episode length IS the score.
+    #
+    # Against a real opponent it is the opposite. `win_rate` is pinned at exactly
+    # 0.5 under self-play by construction — every duel produces one winner and one
+    # loser and both rows are in the same batch — so it carries no information at
+    # all. And a long episode is a STALEMATE, not a success: measured on a 450M
+    # frame run, the old episode-length score picked a 140M checkpoint that drew
+    # 65% of its duels over the 450M one that drew 0% and drove its opponent from
+    # 0.375 m out to 1.21 m against a 1.5 m rim.
+    #
+    # So a real opponent is scored on how far the loser gets driven and on how
+    # decisive the duels are. Neither is an absolute measure of skill — nothing
+    # computed from self-play alone can be, since the opponent improves in step
+    # with the policy — but both point the same way as the task instead of
+    # against it.
+    if eval_env.base_env.cfg.dummy_opponent:
+        metrics["eval/score"] = metrics["eval/episode_length"]
+    else:
+        metrics["eval/score"] = (
+            10.0 * metrics["eval/final_opp_radius"]
+            + 10.0 * (1.0 - metrics.get("eval/draw_rate", 0.0))
+        )
     return metrics
