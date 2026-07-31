@@ -163,6 +163,44 @@ python examples/ppo_sumo.py init_checkpoint=checkpoints/standing/ppo_best.pt
 it happens to topple, which the learner cannot influence. Paying for it is pure
 variance in the advantage estimate.
 
+### `action_scale`, measured
+
+`q_target = home + action_scale * action`, action in [-1, 1]. So it is the
+maximum radians any joint can be commanded away from the home stance: not a gain
+and not a speed limit, but a hard geometric cap on the poses the policy can ask
+for. `tools/measure_reach.py` reports the kinematic envelope it buys (widest
+reachable foot spreads, so an upper bound on gait rather than a step length):
+
+| `action_scale` | stance width | stride | max crouch | reach | clipped by joint limits |
+| --- | --- | --- | --- | --- | --- |
+| 0.2 (11°) | 0.52 m | 0.34 m | 0.05 m | 0.32 m | 0% |
+| 0.3 (17°) | 0.66 m | 0.50 m | 0.11 m | 0.36 m | 1% |
+| 0.4 (23°) | 0.80 m | 0.69 m | 0.19 m | 0.39 m | 3% |
+| **0.5 (29°)** | 0.89 m | 0.78 m | 0.29 m | 0.42 m | 4% |
+| 0.7 (40°) | 1.11 m | 1.01 m | 0.48 m | 0.49 m | 8% |
+| 1.0 (57°) | 1.41 m | 1.17 m | 0.77 m | 0.56 m | 15% |
+
+Two things to read off it.
+
+**The curve never flattens.** The mechanical joint limits are not the binding
+constraint anywhere in this range; `action_scale` is. Every increase buys real
+reach, so choosing it is a trade against controllability rather than against the
+robot's geometry.
+
+**0.5 is the largest scale that cannot crouch into a loss.** The base starts at
+0.784 m and the down-rule fires below 0.431 m, so a drop past 0.353 m loses the
+duel outright. At 0.5 the deepest commandable crouch is 0.294 m, just inside
+that. From 0.7 the action space contains poses that lose immediately.
+
+To start tight and loosen, warm-start across runs rather than scheduling inside
+one, since changing the scale changes what the same action numbers mean:
+
+```bash
+python examples/ppo_sumo.py run_name=tight env.arena.action_scale=0.3
+python examples/ppo_sumo.py run_name=loose env.arena.action_scale=0.6 \
+    init_checkpoint=checkpoints/tight/ppo_best.pt
+```
+
 ### Judge standing against doing nothing, not against zero
 
 The G1 spawns in a stance it cannot passively hold, so it survives a while and
