@@ -32,6 +32,7 @@ def main(cfg):
         cfg,
         total_frames=cfg.collector.total_frames,
         init_ckpt=cfg.get("init_checkpoint", None),
+        init_critic=bool(cfg.get("init_critic", True)),
         run_name=cfg.get("run_name", "sumo1"),
     )
     print(f"best checkpoint: {best}")

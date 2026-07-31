@@ -7,6 +7,10 @@
 # Optional warm start from an existing policy, and the checkpoints/ subdirectory
 # this run writes to. There is no `level`: see examples/ppo_sumo.py.
 init_checkpoint: null
+# Load the checkpoint's critic too. Set false when the reward has changed scale
+# since that checkpoint was trained: a critic fitted to a different return
+# distribution makes GAE worse than a fresh one, not merely noisier.
+init_critic: true
 run_name: sumo1
 
 env:

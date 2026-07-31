@@ -184,7 +184,8 @@ def test_explicit_opponent_robot_builds():
 
 
 def test_ring_radius_is_honoured():
-    _, info = build_sumo_model("g1", cfg=SumoConfig(ring_radius=2.0))
+    cfg = SumoConfig(ring_radius=2.0, spawn_frac=0.6)
+    _, info = build_sumo_model("g1", cfg=cfg)
     for side in info.sides:
         base = info.home_qpos[side.base_qposadr:side.base_qposadr + 3]
         assert math.hypot(base[0], base[1]) == pytest.approx(1.2, abs=1e-5)

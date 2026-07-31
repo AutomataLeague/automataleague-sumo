@@ -33,7 +33,17 @@ class SumoConfig:
     # --- spawn ---
     # Both robots start diametrically opposite at spawn_frac * ring_radius,
     # facing each other along the x axis.
-    spawn_frac: float = 0.6
+    #
+    # 0.25 puts them 0.75 m apart, inside each other's 0.42 m arm reach. That is
+    # deliberate and it is what real sumo does: wrestlers face off at the shikiri
+    # lines about 0.7 m apart, not across the ring.
+    #
+    # It is also the only thing giving the reward an approach gradient. `push`
+    # pays for changing the opponent's radius, which needs contact; `win` needs a
+    # ring-out; `alive` and `centre` are both maximised by standing still in the
+    # middle. Start them a ring apart and two competent standing policies simply
+    # never touch, every episode is a draw, and there is nothing to climb out of.
+    spawn_frac: float = 0.25
 
     # --- who drives side B (see OPPONENT_MODES) ---
     opponent: str = "self"

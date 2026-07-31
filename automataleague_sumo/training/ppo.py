@@ -49,7 +49,7 @@ def _save(path, actor, critic, collected_frames, cfg):
     }, path)
 
 
-def run_ppo(cfg, *, total_frames, init_ckpt=None, run_name="ppo",
+def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="ppo",
             checkpoints_root="checkpoints") -> str:
     """Train one PPO run for ``total_frames``; return the best checkpoint path."""
     device = torch.device(
@@ -79,7 +79,16 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, run_name="ppo",
     if init_ckpt:
         state = torch.load(init_ckpt, map_location=device, weights_only=False)
         actor.load_state_dict(state["actor_state_dict"])
-        critic.load_state_dict(state["critic_state_dict"])
+        if init_critic:
+            critic.load_state_dict(state["critic_state_dict"])
+        else:
+            # A critic is only meaningful against the reward it was fitted to. Carrying
+            # one across a change in reward SCALE is worse than starting fresh: GAE
+            # would subtract a baseline from a distribution that no longer exists, so
+            # the advantages are wrong in sign structure and not merely in magnitude.
+            # The critic refits in a few hundred thousand frames; a poisoned one can
+            # wreck the policy in the first few updates.
+            torchrl_logger.info("Warm start: actor only, critic left fresh")
         torchrl_logger.info(f"Warm-started from {init_ckpt}")
 
     adv_module = GAE(gamma=cfg.loss.gamma, lmbda=cfg.loss.gae_lambda,
