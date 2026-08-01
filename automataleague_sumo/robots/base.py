@@ -192,10 +192,12 @@ class RobotSpec:
     def _add_extra_colliders(self, spec: mujoco.MjSpec) -> None:
         """Graft on the collision primitives upstream left out.
 
-        Added with ``mass=0`` so the robot's inertia is untouched: these exist to
-        make contact happen where the robot visibly is, not to change what the
-        robot weighs. ``tests/test_robots.py`` asserts the total mass and inertia
-        are unchanged.
+        ``mass=0`` is belt and braces, not the mechanism. Every body in the G1
+        carries an explicit ``<inertial>``, and MuJoCo ignores geom mass entirely
+        when one is present — setting it to 5 kg changes the model's total mass by
+        nothing, which was verified rather than assumed. It is set anyway so a
+        future robot WITHOUT explicit inertials does not silently gain weight from
+        a collider that exists only to make contact happen.
         """
         if not self.extra_colliders:
             return

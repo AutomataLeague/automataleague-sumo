@@ -156,9 +156,17 @@ def test_home_qpos_length_mismatch_raises():
 # ------------------------------------------------- grafted collision primitives
 
 def test_extra_colliders_do_not_change_the_robots_mass():
-    """They exist to make contact happen where the robot visibly is, not to
-    change what it weighs. Added with mass=0; without that, five primitives per
-    robot would quietly alter every inertia and every push in the duel."""
+    """They exist to make contact happen where the robot visibly is, not to change
+    what it weighs.
+
+    Honest about its own limits: every G1 body carries an explicit <inertial>, and
+    MuJoCo ignores geom mass when one is present, so for THIS robot the assertion
+    cannot fail — verified by setting the collider mass to 5 kg and watching the
+    total stay at 66.6823. It is kept as insurance for a future robot without
+    explicit inertials, where a grafted collider really would add weight. The
+    assertion that does bite for the G1 is
+    `test_the_grafted_colliders_actually_collide`.
+    """
 
     from automataleague_sumo.envs.sumo.scene import build_sumo_model
 
