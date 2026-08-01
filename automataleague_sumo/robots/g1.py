@@ -18,7 +18,7 @@ import os
 
 import numpy as np
 
-from automataleague_sumo.robots.base import RobotSpec
+from automataleague_sumo.robots.base import ExtraCollider, RobotSpec
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _G1_XML = os.path.join(_ROOT, "assets", "unitree_g1", "g1_mjx.xml")
@@ -80,4 +80,24 @@ def make_g1() -> RobotSpec:
         # from every camera angle. Deliberately NOT `head_link` or `logo_link`,
         # which hang off the same torso_link body — hence selecting by mesh.
         team_colour_meshes=["torso_link"],
+        # Menagerie's MJX variant strips the collision model to what locomotion
+        # needs, which leaves 12 of 30 bodies with nothing at all. For wrestling
+        # the upper body IS the contact surface, so the gaps sit exactly where
+        # grips are made. Extents below are measured from each body's visual mesh.
+        extra_colliders=[
+            # The head. Upstream's sphere sits 45 mm too high and covers only the
+            # top 57%: an arm swept at face height passes straight through.
+            ExtraCollider(body="torso_link", size=0.072,
+                          fromto=(0.008, 0.0, 0.355, 0.008, 0.0, 0.415)),
+            # Upper arms, where a grip is taken.
+            ExtraCollider(body="left_shoulder_roll_link", size=0.040,
+                          fromto=(0.0, 0.0, -0.070, 0.0, 0.0, 0.0)),
+            ExtraCollider(body="right_shoulder_roll_link", size=0.040,
+                          fromto=(0.0, 0.0, -0.070, 0.0, 0.0, 0.0)),
+            # Forearms, the other half of a grip.
+            ExtraCollider(body="left_wrist_roll_link", size=0.030,
+                          fromto=(0.005, 0.0, 0.0, 0.050, 0.0, 0.0)),
+            ExtraCollider(body="right_wrist_roll_link", size=0.030,
+                          fromto=(0.005, 0.0, 0.0, 0.050, 0.0, 0.0)),
+        ],
     )

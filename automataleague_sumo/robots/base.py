@@ -22,6 +22,34 @@ _COLLISION_GROUPS = (3, 4)
 
 
 @dataclass
+class ExtraCollider:
+    """A collision primitive to graft onto a body that upstream left bare.
+
+    Menagerie's MJX variants strip the collision model down to what a locomotion
+    task needs, which is essentially the feet. For two humanoids wrestling the
+    upper body IS the contact surface, so the missing primitives are exactly where
+    the sport happens: replaying a trained policy through both collision models
+    showed 56% of all robot-to-robot contact was simply not happening.
+
+    Positions are in the target body's frame, measured from its visual mesh. A
+    capsule is given by ``fromto``, a sphere by ``pos``; ``size`` is the radius in
+    both cases.
+    """
+
+    body: str
+    size: float
+    pos: tuple[float, float, float] | None = None
+    fromto: tuple[float, float, float, float, float, float] | None = None
+
+    def __post_init__(self):
+        if (self.pos is None) == (self.fromto is None):
+            raise ValueError(
+                f"{self.body}: give exactly one of pos (sphere) or fromto (capsule)")
+        if self.size <= 0:
+            raise ValueError(f"{self.body}: size must be > 0, got {self.size}")
+
+
+@dataclass
 class RobotSpec:
     """Static description of a robot for use by any task.
 
@@ -69,6 +97,7 @@ class RobotSpec:
     joint_scale: dict[str, float] = field(default_factory=dict)
     foot_geoms: list[str] = field(default_factory=list)
     team_colour_meshes: list[str] = field(default_factory=list)
+    extra_colliders: list[ExtraCollider] = field(default_factory=list)
 
     def __post_init__(self):
         self.home_joint_qpos = np.asarray(self.home_joint_qpos, dtype=np.float32)
@@ -157,4 +186,36 @@ class RobotSpec:
                 geom.contype = 1
                 geom.conaffinity = 1
                 geom.condim = 3
+        self._add_extra_colliders(spec)
         return spec
+
+    def _add_extra_colliders(self, spec: mujoco.MjSpec) -> None:
+        """Graft on the collision primitives upstream left out.
+
+        Added with ``mass=0`` so the robot's inertia is untouched: these exist to
+        make contact happen where the robot visibly is, not to change what the
+        robot weighs. ``tests/test_robots.py`` asserts the total mass and inertia
+        are unchanged.
+        """
+        if not self.extra_colliders:
+            return
+        bodies = {body.name: body for body in spec.bodies}
+        for extra in self.extra_colliders:
+            body = bodies.get(extra.body)
+            if body is None:
+                raise ValueError(
+                    f"{self.name}: extra collider names body {extra.body!r}, which "
+                    f"does not exist, so it would silently add nothing. "
+                    f"Bodies: {sorted(bodies)}")
+            geom = body.add_geom()
+            geom.group = _COLLISION_GROUPS[0]
+            geom.contype, geom.conaffinity, geom.condim = 1, 1, 3
+            geom.mass = 0.0
+            if extra.fromto is not None:
+                geom.type = mujoco.mjtGeom.mjGEOM_CAPSULE
+                geom.fromto = list(extra.fromto)
+                geom.size = [extra.size, 0.0, 0.0]
+            else:
+                geom.type = mujoco.mjtGeom.mjGEOM_SPHERE
+                geom.pos = list(extra.pos)
+                geom.size = [extra.size, 0.0, 0.0]

@@ -151,3 +151,76 @@ def test_home_qpos_length_mismatch_raises():
             joint_names=["j1", "j2"], actuator_names=["j1", "j2"],
             home_joint_qpos=np.zeros(3),
         )
+
+
+# ------------------------------------------------- grafted collision primitives
+
+def test_extra_colliders_do_not_change_the_robots_mass():
+    """They exist to make contact happen where the robot visibly is, not to
+    change what it weighs. Added with mass=0; without that, five primitives per
+    robot would quietly alter every inertia and every push in the duel."""
+
+    from automataleague_sumo.envs.sumo.scene import build_sumo_model
+
+    plain = get_robot("g1")
+    plain.extra_colliders = []
+    bare, _ = build_sumo_model(plain)
+    full, _ = build_sumo_model(get_robot("g1"))
+
+    assert full.ngeom > bare.ngeom, "no colliders were added at all"
+    assert float(full.body_mass.sum()) == pytest.approx(float(bare.body_mass.sum()))
+    assert np.allclose(full.body_inertia.sum(0), bare.body_inertia.sum(0), atol=1e-9)
+
+
+def test_the_grafted_colliders_actually_collide():
+    """Group and contype have to be set or the geoms are decorative. Checked by
+    driving two robots into each other and requiring the new bodies to appear in
+    the contact list, since a bare `add_geom` defaults to a non-colliding group.
+    """
+    import mujoco
+
+    from automataleague_sumo.envs.sumo.scene import build_sumo_model
+
+    model, scene = build_sumo_model("g1")
+    data = mujoco.MjData(model)
+    data.qpos[:] = scene.home_qpos
+    # Drop side B onto side A so every part is in contact with something.
+    qa, qb = scene.a.base_qposadr, scene.b.base_qposadr
+    data.qpos[qb:qb + 3] = data.qpos[qa:qa + 3]
+    mujoco.mj_forward(model, data)
+
+    a, b = set(scene.a.geom_ids.tolist()), set(scene.b.geom_ids.tolist())
+    touched = set()
+    for c in data.contact[:data.ncon]:
+        g1, g2 = int(c.geom1), int(c.geom2)
+        if (g1 in a and g2 in b) or (g1 in b and g2 in a):
+            for g in (g1, g2):
+                touched.add(mujoco.mj_id2name(
+                    model, mujoco.mjtObj.mjOBJ_BODY, int(model.geom_bodyid[g]))[2:])
+
+    for body in ("left_shoulder_roll_link", "right_shoulder_roll_link"):
+        assert body in touched, (
+            f"{body} carries a grafted collider but never appears in a contact, "
+            f"so it is not colliding. Touched: {sorted(touched)}")
+
+
+def test_a_collider_on_a_missing_body_is_an_error():
+    """It would otherwise silently add nothing while the spec claimed the part
+    was covered — which is the whole failure being fixed here."""
+    from automataleague_sumo.robots.base import ExtraCollider
+
+    spec = get_robot("g1")
+    spec.extra_colliders = [ExtraCollider(body="tail_link", size=0.05,
+                                          pos=(0.0, 0.0, 0.0))]
+    with pytest.raises(ValueError, match="does not exist"):
+        spec.load_spec()
+
+
+def test_a_collider_must_be_either_a_sphere_or_a_capsule():
+    from automataleague_sumo.robots.base import ExtraCollider
+
+    with pytest.raises(ValueError, match="exactly one of"):
+        ExtraCollider(body="torso_link", size=0.05)
+    with pytest.raises(ValueError, match="exactly one of"):
+        ExtraCollider(body="torso_link", size=0.05, pos=(0, 0, 0),
+                      fromto=(0, 0, 0, 0, 0, 1))

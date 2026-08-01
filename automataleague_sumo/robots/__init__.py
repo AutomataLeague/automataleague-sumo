@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from automataleague_sumo.robots.base import RobotSpec
+from automataleague_sumo.robots.base import ExtraCollider, RobotSpec
 from automataleague_sumo.robots.g1 import make_g1
 
 ROBOTS: dict[str, Callable[[], RobotSpec]] = {
@@ -22,4 +22,5 @@ def get_robot(name: str) -> RobotSpec:
     return ROBOTS[name]()
 
 
-__all__ = ["RobotSpec", "ROBOTS", "get_robot"]
+__all__ = ["ExtraCollider",
+    "RobotSpec", "ROBOTS", "get_robot"]
