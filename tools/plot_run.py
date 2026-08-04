@@ -34,7 +34,9 @@ PANELS = [
     ("Episode length", "control steps", [
         ("train/episode_length", "train", PRIMARY),
         ("eval/episode_length", "eval", SECONDARY)]),
-    ("Episode reward", "return", [("train/reward", "train", PRIMARY)]),
+    ("Episode reward", "return", [
+        ("train/reward", "train", PRIMARY),
+        ("eval/reward", "eval", SECONDARY)]),
     ("How duels ended", "fraction of episodes", [
         ("train/loss_rate", "learner lost", PRIMARY),
         ("train/draw_rate", "survived to timeout", SECONDARY)]),

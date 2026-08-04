@@ -20,6 +20,22 @@ _ARENA_KEYS = (
 
 
 def log_metrics(logger, metrics, step):
+    """Log a whole batch of metrics at ``step``.
+
+    For wandb this writes the entire dict in ONE call with an explicit step,
+    rather than one ``log_scalar`` per metric. TorchRL's WandbLogger performs its
+    own per-group step injection and does not forward our step to wandb's global
+    counter, so every call landed on ``_step: 0`` and overwrote the last: a
+    1B-frame run with 15,259 batches arrived as a single history row holding only
+    the final values, while the local metrics.jsonl had all of them.
+
+    One call per batch instead of twenty is also the shape wandb expects, since a
+    dict logged together becomes one row.
+    """
+    experiment = getattr(logger, "experiment", None)
+    if experiment is not None and hasattr(experiment, "log"):
+        experiment.log(dict(metrics), step=int(step))
+        return
     for name, value in metrics.items():
         logger.log_scalar(name, value, step)
 
