@@ -40,6 +40,31 @@ def outcome_rates(codes: torch.Tensor) -> dict[str, float]:
             for code, name in _OUTCOME_NAMES.items()}
 
 
+def _abort_on_nonfinite(loss, batch, collected_frames, checkpoint_dir) -> None:
+    """Raise with enough detail to identify the cause without a rerun."""
+    parts = {k: float(v) for k, v in loss.items() if v.numel() == 1}
+    diag = {
+        "collected_frames": collected_frames,
+        "losses": parts,
+        "obs_absmax": float(batch["observation"].abs().max()),
+        "obs_finite": bool(torch.isfinite(batch["observation"]).all()),
+        "action_absmax": float(batch["action"].abs().max()),
+        "actions_at_bound": int((batch["action"].abs() >= 1.0 - 1e-7).sum()),
+        "advantage_absmax": float(batch["advantage"].abs().max())
+        if "advantage" in batch.keys() else None,
+        "scale_min": float(batch["scale"].min()) if "scale" in batch.keys() else None,
+        "scale_max": float(batch["scale"].max()) if "scale" in batch.keys() else None,
+        "sample_log_prob_absmax": float(batch["sample_log_prob"].abs().max())
+        if "sample_log_prob" in batch.keys() else None,
+    }
+    path = os.path.join(checkpoint_dir, "nonfinite_loss.json")
+    with open(path, "w") as fh:
+        json.dump(diag, fh, indent=2)
+    raise FloatingPointError(
+        f"non-finite loss at {collected_frames:,} frames; diagnostics written to "
+        f"{path}\n{json.dumps(diag, indent=2)}")
+
+
 def _save(path, actor, critic, collected_frames, cfg):
     torch.save({
         "actor_state_dict": actor.state_dict(),
@@ -188,8 +213,17 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="pp
 
                 optim.zero_grad(set_to_none=True)
                 loss = loss_module(batch)
-                (loss["loss_objective"] + loss["loss_entropy"]
-                 + loss["loss_critic"]).backward()
+                total = (loss["loss_objective"] + loss["loss_entropy"]
+                         + loss["loss_critic"])
+                # A non-finite loss produces non-finite gradients, and
+                # clip_grad_norm_ then multiplies EVERY parameter by that NaN, so
+                # one bad batch destroys the whole network in a single step. This
+                # happened once at 500M frames and the run went on producing
+                # garbage for another 500M because nothing checked. Abort here and
+                # report what was non-finite, rather than train on wreckage.
+                if not torch.isfinite(total):
+                    _abort_on_nonfinite(loss, batch, collected_frames, checkpoint_dir)
+                total.backward()
                 torch.nn.utils.clip_grad_norm_(
                     loss_module.parameters(), cfg.loss.max_grad_norm)
                 optim.step()

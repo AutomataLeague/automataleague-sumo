@@ -30,6 +30,14 @@ from automataleague_sumo.robots import RobotSpec
 # Ring block (4) + opponent block (10). Independent of the robot.
 TASK_DIM = 14
 
+# Every observation component is clipped to this magnitude. Contact between two
+# humanoids drives joint velocities to spikes far outside their working range —
+# measured at 49.5 rad/s against a mean of about 2.5 — and those go straight into
+# an unnormalised network. The bound is set above everything the task actually
+# uses (the largest non-spike component measured was 21.7) so it truncates the
+# collision tail and nothing else.
+OBS_CLIP = 25.0
+
 
 def observation_dim(robot: RobotSpec) -> int:
     """Total observation width for ``robot``, derived from its joint count."""
@@ -81,4 +89,4 @@ def build_observation(
         ((ring_radius - r_opp) / ring_radius).unsqueeze(-1),         # 1
         contact.reshape(-1, 1).to(own.joint_pos.dtype),              # 1
     ]
-    return torch.cat(parts, dim=-1)
+    return torch.cat(parts, dim=-1).clamp(-OBS_CLIP, OBS_CLIP)

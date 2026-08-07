@@ -226,3 +226,52 @@ def test_observation_is_batched(pair):
     obs = build_observation(rep(own), rep(opp), prev_action.repeat(8, 1), home,
                             RING, contact.repeat(8))
     assert obs.shape == (8, 110)
+
+
+# ------------------------------------------------------------------- clipping
+
+def test_the_observation_is_bounded():
+    """Contact between two humanoids drives joint velocities far outside their
+    working range — measured at 49.5 rad/s against a mean of about 2.5 — and those
+    feed an unnormalised network. A 1B-frame run died at 500M when the losses went
+    non-finite and clip_grad_norm_ multiplied every weight by the NaN.
+    """
+    from automataleague_sumo.envs.sumo.observation import OBS_CLIP
+
+    robot = get_robot("g1")
+    n = robot.n_joints
+    wild = RobotState(
+        base_pos=torch.tensor([[0.3, 0.0, 1.0]]),
+        base_quat=torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
+        base_linvel_world=torch.full((1, 3), 500.0),
+        base_angvel_local=torch.full((1, 3), -900.0),
+        joint_pos=torch.full((1, n), 40.0),
+        joint_vel=torch.full((1, n), -3000.0),
+    )
+    obs = build_observation(wild, wild, torch.zeros(1, n),
+                            torch.zeros(n), 1.5, torch.zeros(1))
+    assert torch.isfinite(obs).all()
+    assert float(obs.abs().max()) <= OBS_CLIP + 1e-6
+
+
+def test_the_clip_does_not_touch_ordinary_play():
+    """A bound that clipped normal signal would be silently destroying the
+    observation rather than protecting it. The largest non-spike component
+    measured in real duels was 21.7, so the bound has to sit above that."""
+    from automataleague_sumo.envs.sumo.observation import OBS_CLIP
+
+    assert OBS_CLIP > 21.7, "the clip would truncate signal the task actually uses"
+
+    robot = get_robot("g1")
+    n = robot.n_joints
+    normal = RobotState(
+        base_pos=torch.tensor([[0.4, 0.1, 1.0]]),
+        base_quat=torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
+        base_linvel_world=torch.full((1, 3), 1.5),
+        base_angvel_local=torch.full((1, 3), 2.0),
+        joint_pos=torch.full((1, n), 0.3),
+        joint_vel=torch.full((1, n), 3.0),
+    )
+    obs = build_observation(normal, normal, torch.zeros(1, n),
+                            torch.zeros(n), 1.5, torch.zeros(1))
+    assert float(obs.abs().max()) < OBS_CLIP, "ordinary play is being clipped"
