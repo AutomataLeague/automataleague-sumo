@@ -42,6 +42,10 @@ def parse_args():
     p.add_argument("--nconmax", type=int, default=160)
     p.add_argument("--njmax", type=int, default=600)
     p.add_argument("--device", default="cuda:0")
+    p.add_argument("--checkpoint", default=None,
+                   help="drive with a trained policy instead of random actions. "
+                        "Random actions barely make the robots touch, so the "
+                        "contact peak they report understates a real duel badly.")
     p.add_argument("--skip-symmetry", action="store_true")
     p.add_argument(
         "--inject-crossed-index", action="store_true",
@@ -151,12 +155,34 @@ def main():
     rows = env.batch_size[0]
     act_dim = env.action_spec.shape[-1]
 
+    actor = None
+    if args.checkpoint:
+        from omegaconf import OmegaConf
+        from tensordict import TensorDict
+        from torchrl.envs import ExplorationType, set_exploration_type
+
+        from automataleague_sumo.robots import get_robot
+        from automataleague_sumo.training.models import build_actor
+
+        state = torch.load(args.checkpoint, map_location=env.device, weights_only=False)
+        ckpt_cfg = OmegaConf.create(state["config"])
+        actor = build_actor(ckpt_cfg, get_robot(args.robot), env.device)
+        actor.load_state_dict(state["actor_state_dict"])
+        actor.eval()
+        print(f"  driving with {args.checkpoint}")
+
     peak_contacts = 0
     for i in range(args.warmup + args.steps):
         if i == args.warmup:
             torch.cuda.synchronize()
             t0 = time.time()
-        td["action"] = torch.zeros(rows, act_dim, device=env.device).uniform_(-0.3, 0.3)
+        if actor is None:
+            td["action"] = torch.zeros(
+                rows, act_dim, device=env.device).uniform_(-0.3, 0.3)
+        else:
+            with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+                td["action"] = actor(TensorDict(
+                    {"observation": td["observation"]}, batch_size=[rows]))["action"]
         _, td = env.step_and_maybe_reset(td)
         peak_contacts = max(peak_contacts, env.contact_headroom()["active_contacts"])
     torch.cuda.synchronize()
