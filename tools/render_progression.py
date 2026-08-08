@@ -36,8 +36,10 @@ def parse_args():
     p.add_argument("checkpoints", nargs="+")
     p.add_argument("--pick", type=int, default=5,
                    help="subsample evenly to this many checkpoints")
-    p.add_argument("--episodes", type=int, default=3,
-                   help="duels per checkpoint. One duel shows a result, not a policy.")
+    p.add_argument("--episodes", type=int, default=5,
+                   help="duels per checkpoint. One duel shows a result, not a policy, "
+                        "and three is still too few: the same checkpoint produced 46 "
+                        "and 160 step duels back to back.")
     p.add_argument("--out", default="renders")
     p.add_argument("--fps", type=int, default=50)
     p.add_argument("--size", type=int, nargs=2, default=[420, 720])
