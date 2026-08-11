@@ -40,13 +40,64 @@ def outcome_rates(codes: torch.Tensor) -> dict[str, float]:
             for code, name in _OUTCOME_NAMES.items()}
 
 
-_MAX_CONSECUTIVE_BAD_GRADS = 25
+_MAX_CONSECUTIVE_BAD_UPDATES = 25
+
+# exp() of a float32 log-ratio overflows to inf above ~88, and TorchRL bounds the
+# ratio on only ONE of PPO's two branches. In `ClipPPOLoss`:
+#
+#     gain1 = log_weight.exp() * advantage           # unbounded
+#     gain2 = log_weight.clamp(*clip_bounds).exp() * advantage
+#     gain  = min(gain1, gain2)
+#
+# The pessimistic `min` selects the CLIPPED branch when the advantage is positive
+# and the UNCLIPPED one when it is negative. So a single sample whose ratio
+# overflows lands on -inf and the whole objective becomes +inf, no matter how
+# healthy the network is. Measured exactly that at 12.8M frames: entropy 7.98,
+# explained_variance 0.85, critic loss 1.59, all finite, with max_ratio inf and
+# ESS 1/8192 — one sample in the minibatch, everything else fine.
+#
+# The ratios get that large because the policy is a TanhNormal and an action at
+# 0.9999990 sits deep in the saturation, where log_prob is dominated by the
+# -log(1 - a^2) jacobian and is violently sensitive to a small shift in the mean.
+#
+# 20 is a numerical backstop, not a second clip. It admits ratios up to 4.9e8,
+# eight orders of magnitude outside the 1 +- clip_epsilon trust region, so every
+# update PPO would consider reasonable is bit-identical with and without it.
+# Samples beyond it lose their gradient, which is the point: a ratio of e^20
+# against a normalised advantage sets the direction of the entire batch on its own.
+_MAX_LOG_WEIGHT = 20.0
+
+
+class BoundedRatioPPOLoss(ClipPPOLoss):
+    """``ClipPPOLoss`` whose importance ratio cannot overflow to infinity."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._saturated = None
+
+    def _log_weight(self, *args, **kwargs):
+        out = super()._log_weight(*args, **kwargs)
+        log_weight = out[0]
+        # Counted on device and summed across minibatches; `pop_saturated` does
+        # the single host sync per collector batch. Reading it here would sync
+        # once per minibatch, which is 32 stalls a batch to log one integer.
+        with torch.no_grad():
+            n = (log_weight.abs() > _MAX_LOG_WEIGHT).sum()
+            self._saturated = n if self._saturated is None else self._saturated + n
+        return (log_weight.clamp(-_MAX_LOG_WEIGHT, _MAX_LOG_WEIGHT), *out[1:])
+
+    def pop_saturated(self) -> int:
+        """Samples clamped since the last call, and reset."""
+        count = 0 if self._saturated is None else int(self._saturated)
+        self._saturated = None
+        return count
 
 
 def _abort_on_nonfinite(loss, batch, collected_frames, checkpoint_dir,
-                        note: str = "") -> None:
+                        note: str = "", log_prob_key: str = "sample_log_prob") -> None:
     """Raise with enough detail to identify the cause without a rerun."""
     parts = {k: float(v) for k, v in loss.items() if v.numel() == 1}
+    log_prob = batch.get(log_prob_key, None)
     diag = {
         "collected_frames": collected_frames,
         "note": note,
@@ -59,8 +110,13 @@ def _abort_on_nonfinite(loss, batch, collected_frames, checkpoint_dir,
         if "advantage" in batch.keys() else None,
         "scale_min": float(batch["scale"].min()) if "scale" in batch.keys() else None,
         "scale_max": float(batch["scale"].max()) if "scale" in batch.keys() else None,
-        "sample_log_prob_absmax": float(batch["sample_log_prob"].abs().max())
-        if "sample_log_prob" in batch.keys() else None,
+        # Looked up through the loss module's own key rather than a hardcoded
+        # name: TorchRL renamed this to "action_log_prob", so the literal
+        # "sample_log_prob" silently reported None on the one diagnostic dump
+        # that most needed it.
+        "log_prob_absmax": (None if log_prob is None
+                            else float(log_prob.abs().max())),
+        "log_prob_key": str(log_prob_key),
     }
     path = os.path.join(checkpoint_dir, "nonfinite_loss.json")
     with open(path, "w") as fh:
@@ -123,7 +179,7 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="pp
 
     adv_module = GAE(gamma=cfg.loss.gamma, lmbda=cfg.loss.gae_lambda,
                      value_network=critic, average_gae=False, device=device)
-    loss_module = ClipPPOLoss(
+    loss_module = BoundedRatioPPOLoss(
         actor_network=actor, critic_network=critic,
         clip_epsilon=cfg.loss.clip_epsilon, loss_critic_type=cfg.loss.loss_critic_type,
         entropy_coeff=cfg.loss.entropy_coeff, critic_coeff=cfg.loss.critic_coeff,
@@ -159,7 +215,7 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="pp
     start_time = time.time()
     collected_frames = 0
     num_network_updates = 0
-    bad_grads = consecutive_bad = 0
+    bad_updates = consecutive_bad = 0
     best_score = float("-inf")
     pbar = tqdm.tqdm(total=int(total_frames))
     td = train_env.reset()
@@ -225,10 +281,24 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="pp
                 # clip_grad_norm_ then multiplies EVERY parameter by that NaN, so
                 # one bad batch destroys the whole network in a single step. This
                 # happened once at 500M frames and the run went on producing
-                # garbage for another 500M because nothing checked. Abort here and
-                # report what was non-finite, rather than train on wreckage.
+                # garbage for another 500M because nothing checked.
+                #
+                # Skip rather than abort, for the same reason as the gradient
+                # guard below: aborting killed a 300M-frame run 6 minutes in over
+                # a single outlier sample out of 8192, with every other quantity
+                # in the dump healthy. The weights are untouched at this point.
                 if not torch.isfinite(total):
-                    _abort_on_nonfinite(loss, batch, collected_frames, checkpoint_dir)
+                    optim.zero_grad(set_to_none=True)
+                    bad_updates += 1
+                    consecutive_bad += 1
+                    if consecutive_bad >= _MAX_CONSECUTIVE_BAD_UPDATES:
+                        _abort_on_nonfinite(
+                            loss, batch, collected_frames, checkpoint_dir,
+                            note=f"{consecutive_bad} consecutive non-finite "
+                                 f"losses; the policy is diverging, not hitting "
+                                 f"one bad sample",
+                            log_prob_key=loss_module.tensor_keys.sample_log_prob)
+                    continue
                 total.backward()
                 # clip_grad_norm_ returns the norm BEFORE clipping, and a
                 # non-finite one is fatal: clipping scales every parameter by
@@ -245,14 +315,15 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="pp
                     # multi-hour run, and the weights are still intact at this
                     # point precisely because the step is being skipped.
                     optim.zero_grad(set_to_none=True)
-                    bad_grads += 1
+                    bad_updates += 1
                     consecutive_bad += 1
-                    if consecutive_bad >= _MAX_CONSECUTIVE_BAD_GRADS:
+                    if consecutive_bad >= _MAX_CONSECUTIVE_BAD_UPDATES:
                         _abort_on_nonfinite(
                             loss, batch, collected_frames, checkpoint_dir,
                             note=f"{consecutive_bad} consecutive non-finite "
                                  f"gradients; the policy is diverging, not "
-                                 f"hitting one bad batch")
+                                 f"hitting one bad batch",
+                            log_prob_key=loss_module.tensor_keys.sample_log_prob)
                     continue
                 consecutive_bad = 0
                 optim.step()
@@ -262,7 +333,11 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="pp
         # Surfaced as a metric, not just a log line: a run quietly skipping a
         # rising fraction of its updates is diverging, and that is visible here
         # long before it becomes fatal.
-        metrics["train/skipped_updates"] = bad_grads
+        metrics["train/skipped_updates"] = bad_updates
+        # Ratios so far outside the trust region that they were clamped to stay
+        # finite. Nonzero is not fatal, but a rising count is the policy taking
+        # steps it cannot justify, visible long before anything overflows.
+        metrics["train/saturated_ratios"] = loss_module.pop_saturated()
         for key, value in losses.apply(
                 lambda x: x.float().mean(), batch_size=[]).items():
             metrics[f"train/{key}"] = value.item()
