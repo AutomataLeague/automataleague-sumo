@@ -15,61 +15,72 @@ All commands assume `MUJOCO_GL=egl`, because evaluation renders headlessly.
 
 ## What we learned
 
-Ten things, each of which cost real GPU time to find out. The rest of this
-document is the evidence behind them.
+Seven findings from this project specifically. Each one cost GPU time, each one
+surprised us, and the rest of this document is the evidence behind them.
 
-**1. Almost every defect was a measurement that could not report the state it
-existed to detect.** A test that passed whatever the code did, a `pgrep` that
-always said "running", a win rate pinned at 0.5 by construction, a reward curve
-that looked identical whether the run was healthy or had silently gone NaN. When
-something is wrong and nothing is complaining, suspect the instrument first.
+**1. The training curves here are blind, and not by accident.** Self-play win
+rate is pinned at exactly 0.5 by construction: every duel makes one winner and
+one loser, and under a shared policy both rows land in the same batch. Reward is
+near-flat for a related reason, and sat at about −1.5 in *every* run we did,
+including the healthy ones and the one that had silently gone NaN 500M frames
+earlier. Progress can only be measured by playing checkpoints against frozen
+past checkpoints. Build that tournament before you spend the GPU time, not after.
 
-**2. In self-play, training metrics cannot tell you whether the policy
-improved.** Win rate is 0.5 by construction and reward is near-flat because only
-the terminal term is zero sum. Build the tournament *before* spending the GPU
-time, not after. See [Measuring progress](#measuring-progress).
-
-**3. Judge every result against doing nothing.** Zero actions survive 73.6 steps
-here. The first "successful" policy scored 66, so it had learned something
-actively worse than standing still, and its training curve rose the whole way.
-
-**4. A held pose is not balance.** A policy that survived a full 750-step episode
-and never lost a duel fell to a gentle 0.5 m/s shove in 6 of 6 seeds. Unobserved
-perturbations are what make the difference real.
-
-**5. A plateau is more often the environment than the algorithm.** Two separate
-1B-frame runs flattened at the same 58%. It was not the learning: the vendored
-collision model was missing **56% of all contact**, and half the robot's body was
-intangible in a sport that is entirely about contact. Audit a vendored asset
+**2. A 1B-frame plateau turned out to be the collision model, not the learning.**
+Two separate runs flattened at the same 58% win rate and stayed there for 600M
+frames, which reads exactly like "needs more compute". The vendored MJX model was
+stripped for locomotion: **12 of 30 bodies had no collision geom at all**,
+including both shoulders and both forearms, and **56% of all robot-to-robot
+contact was missing**. Both policies had been exploiting the same holes
+symmetrically, so the stalemate looked stable and earned. Audit a vendored asset
 against *your* task, not the one it shipped for.
 
-**6. Reward weights must be denominated in comparable units.** With per-step
-weights, a shaping term worth 0.3 a step quietly outscored a terminal +10 by
-thirteen times over an episode, and no number anywhere said so. Every weight here
-is a whole-episode value, and the config refuses to construct if the shaping
-budget can outscore a win.
+**3. A policy that never lost a duel had no balance at all.** It held a stance
+for the full 750-step episode, and a gentle 0.5 m/s shove put it down in **6 of 6
+seeds**. Standing still and staying upright are different skills, and only the
+first one shows up in an episode-length metric. The fix is perturbations the
+policy *cannot see* in its observation: a disturbance you can anticipate is a
+control input, not a disturbance.
 
-**7. Check the reward pays for the behaviour you are asking for, before
-training.** Ours once made surviving at the spawn radius worth −0.130 per step,
-so the optimal policy was to creep inward instead of stand. The policy was
-obeying; we were not.
+**4. A hard capability cap is indistinguishable from a policy choice.** The G1's
+arms hung by its sides for an entire run, which reads as the policy deciding not
+to use them. In fact `action_scale` is a symmetric window around the **home**
+pose, and the G1's home pose already bends the elbow 1.28 rad, so at a uniform
+0.5 the elbow could never get within 45° of straight. The policy was not
+declining to reach; reaching was not in the action space. Per-joint scaling
+raised measured arm reach from 0.42 m to 0.59 m and the grappling appeared.
 
-**8. Capability must be measured, not guessed.** `action_scale` is a symmetric
-window around the *home* pose, so one number cannot serve a whole robot. At a
-uniform 0.5 the G1's elbows could never reach within 45° of straight, so the arms
-hung, and it looked exactly like a policy choosing not to use them.
+**5. Twice, what looked like a failing policy was a policy correctly obeying a
+reward we had mis-specified.** Surviving at the spawn radius scored **−0.130 per
+step**, so creeping inward really was optimal. Separately, with per-step weights,
+a shaping term worth 0.3 a step outscored a terminal +10 by **thirteen times**
+over an episode, and no number anywhere revealed it. Denominating every weight as
+a whole-episode value makes the comparison readable at a glance, and the config
+now refuses to construct if the shaping budget can outscore a win.
 
-**9. Never bound a runaway with `clamp()` if it sits in a gradient path.** clamp
-has zero gradient outside its range, so it deletes the corrective force on
-precisely the samples that ran away, and it is self-reinforcing. Doing this to
-the PPO importance ratio destroyed a run far more thoroughly than the numerical
-overflow it was added to prevent. Use a smooth squash, or skip the update, and
-bound the source instead.
+**6. Bounding a runaway with `clamp()` destroyed a run far worse than the
+overflow it prevented.** `torch.clamp` has zero gradient outside its range, so
+clamping the PPO importance ratio deleted the policy gradient on exactly the
+samples that had run away, and it is self-reinforcing: within 13M frames every
+sample was clamped, the entropy bonus ran unopposed, and σ collapsed from 0.36 to
+0.0027 over 40M frames. Worst of all it was silent, because `train/reward` *rose*
+from −1.46 to −0.54 throughout the collapse: shorter episodes accrue less of the
+per-episode shaping cost. Use a smooth squash or skip the update, and bound the
+source rather than the symptom.
 
-**10. The last checkpoint is frequently not the best one.** It lost to an earlier
-checkpoint four separate times here, once by 58.3% over a thousand duels. And
-more frames is not reliably more skill: 590M additional frames past 1B bought a
-57.4% head-to-head edge, an order of magnitude less than one collision fix did.
+**7. More frames is not reliably more skill, and the newest checkpoint is often
+not the best one.** An earlier checkpoint beat the final one **four separate
+times**, once by 58.3% over a thousand duels. And 590M frames beyond 1B bought a
+57.4% head-to-head edge over the policy they started from, an order of magnitude
+less than a single collision fix delivered. Each warm restart also knocked the
+policy down to 28.6% against the field for ~200M frames, because it restarts the
+learning-rate anneal at full strength on an already-converged policy.
+
+**The common thread:** in nearly every case above, the instrument was silent. A
+test that passed whatever the code did, a win rate that was a constant by
+construction, a reward curve identical whether the run was healthy or wrecked.
+When something is wrong and nothing is complaining, suspect the measurement
+before the model.
 
 ---
 
