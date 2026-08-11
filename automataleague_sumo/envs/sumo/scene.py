@@ -31,8 +31,12 @@ _BAND_WIDTH = 0.08      # painted rim band, purely visual
 # than a flat repaint, so the model keeps its own light and dark parts and still
 # reads as a G1 — at full strength both robots become featureless silhouettes and
 # you lose the shading that shows which way a limb is pointing.
-_TEAM_A = (0.20, 0.45, 0.95)     # blue
-_TEAM_B = (0.90, 0.25, 0.22)     # red
+# Public: overlays draw the word "BLUE" in exactly the colour on that robot's
+# chest, so the caption and the model cannot drift apart.
+TEAM_A_RGB = (0.20, 0.45, 0.95)  # blue
+TEAM_B_RGB = (0.90, 0.25, 0.22)  # red
+_TEAM_A = TEAM_A_RGB
+_TEAM_B = TEAM_B_RGB
 _TINT = 1.0                      # 0 = untouched, 1 = flat team colour
 _VISUAL_GROUP = 2                # the rendered shell; 3 and 4 are collision proxies
 

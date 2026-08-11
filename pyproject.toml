@@ -13,6 +13,10 @@ dependencies = [
     "numpy>=1.24",
     "torch>=2.4",
     "imageio>=2.34",
+    # Used directly by envs/sumo/overlay.py. imageio happens to pull it in today,
+    # but depending on a transitive dependency is how a package ends up broken on
+    # the versions it claims to support.
+    "pillow>=10.0",
     "imageio-ffmpeg>=0.5",
 ]
 
