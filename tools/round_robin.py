@@ -23,7 +23,9 @@ every pairing runs as N simultaneous duels.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
+import json
 import os
 
 import numpy as np
@@ -58,6 +60,10 @@ def parse_args():
                         "past this instead of raising, which reads as two robots "
                         "passing through each other")
     p.add_argument("--njmax", type=int, default=600)
+    p.add_argument("--out", default=None, metavar="PATH",
+                   help="write the full result matrix and ratings as JSON. A "
+                        "tournament is expensive and otherwise exists only as "
+                        "terminal scrollback")
     return p.parse_args()
 
 
@@ -68,6 +74,15 @@ def frames_of(path: str) -> int:
                               weights_only=False).get("collected_frames") or 0)
     except Exception:
         return 0
+
+
+def _sha256(path: str) -> str:
+    """Identify the artifact that earned a rating, without keeping a copy of it."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def label(path: str, frames: int) -> str:
@@ -273,6 +288,41 @@ def main():
     ascending = sum(1 for x, y in zip(ranked, ranked[1:]) if y >= x)
     print(f"\nmonotonicity: {ascending} of {len(ranked) - 1} consecutive steps "
           f"improve or hold")
+
+    if args.out:
+        # A tournament is expensive and its result used to exist only as terminal
+        # scrollback. Persist the whole matrix, not just the ranking: a rating is
+        # a summary, and anything published later (a page, a comparison across
+        # runs) needs the counts it was derived from to be checkable.
+        entrants = [{
+            "label": names[i],
+            "algorithm": policies[i].info.algorithm,
+            "frames": policies[i].info.frames,
+            "env_version": policies[i].info.env_version,
+            "artifact": paths[i],
+            # Identifies the exact file that earned this rating without keeping a
+            # copy of it. A private board stores results, not a policy zoo.
+            "sha256": _sha256(paths[i]),
+            "rating": round(float(ratings[i]), 1),
+            "win_rate": round(float(overall[i]), 4),
+        } for i in range(k)]
+        report = {
+            "env_id": env_id,
+            "robot": robot_name,
+            "duels_per_ordering": args.duels,
+            "seed": args.seed,
+            "anchor": None if anchor is None else names[anchor],
+            "anchor_rating": DEFAULT_RATING,
+            "entrants": entrants,
+            "wins": wins.astype(int).tolist(),
+            "draws": draws.astype(int).tolist(),
+            "played": played.astype(int).tolist(),
+            "transitivity": {"cycles": int(cycles), "triples": int(total)},
+        }
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        with open(args.out, "w") as fh:
+            json.dump(report, fh, indent=2)
+        print(f"\nwrote {args.out}")
 
 
 if __name__ == "__main__":
