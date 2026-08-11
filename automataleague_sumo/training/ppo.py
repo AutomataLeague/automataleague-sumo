@@ -40,11 +40,16 @@ def outcome_rates(codes: torch.Tensor) -> dict[str, float]:
             for code, name in _OUTCOME_NAMES.items()}
 
 
-def _abort_on_nonfinite(loss, batch, collected_frames, checkpoint_dir) -> None:
+_MAX_CONSECUTIVE_BAD_GRADS = 25
+
+
+def _abort_on_nonfinite(loss, batch, collected_frames, checkpoint_dir,
+                        note: str = "") -> None:
     """Raise with enough detail to identify the cause without a rerun."""
     parts = {k: float(v) for k, v in loss.items() if v.numel() == 1}
     diag = {
         "collected_frames": collected_frames,
+        "note": note,
         "losses": parts,
         "obs_absmax": float(batch["observation"].abs().max()),
         "obs_finite": bool(torch.isfinite(batch["observation"]).all()),
@@ -154,6 +159,7 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="pp
     start_time = time.time()
     collected_frames = 0
     num_network_updates = 0
+    bad_grads = consecutive_bad = 0
     best_score = float("-inf")
     pbar = tqdm.tqdm(total=int(total_frames))
     td = train_env.reset()
@@ -224,12 +230,39 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="pp
                 if not torch.isfinite(total):
                     _abort_on_nonfinite(loss, batch, collected_frames, checkpoint_dir)
                 total.backward()
-                torch.nn.utils.clip_grad_norm_(
+                # clip_grad_norm_ returns the norm BEFORE clipping, and a
+                # non-finite one is fatal: clipping scales every parameter by
+                # norm/max_grad_norm, so an inf or NaN norm turns the whole
+                # network to NaN in a single step. A finite LOSS does not imply a
+                # finite gradient — checking only the loss is what let a run reach
+                # 292M frames and then destroy itself anyway, with clip_fraction
+                # at 1.0 (every importance ratio outside the clip range) because
+                # PPO clips the objective, not the gradient magnitude.
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     loss_module.parameters(), cfg.loss.max_grad_norm)
+                if not torch.isfinite(grad_norm):
+                    # Skip rather than abort: one violent batch should not end a
+                    # multi-hour run, and the weights are still intact at this
+                    # point precisely because the step is being skipped.
+                    optim.zero_grad(set_to_none=True)
+                    bad_grads += 1
+                    consecutive_bad += 1
+                    if consecutive_bad >= _MAX_CONSECUTIVE_BAD_GRADS:
+                        _abort_on_nonfinite(
+                            loss, batch, collected_frames, checkpoint_dir,
+                            note=f"{consecutive_bad} consecutive non-finite "
+                                 f"gradients; the policy is diverging, not "
+                                 f"hitting one bad batch")
+                    continue
+                consecutive_bad = 0
                 optim.step()
                 losses[j, k] = loss.detach().select(
                     "loss_critic", "loss_entropy", "loss_objective")
         metrics["train/training_time"] = time.time() - train_start
+        # Surfaced as a metric, not just a log line: a run quietly skipping a
+        # rising fraction of its updates is diverging, and that is visible here
+        # long before it becomes fatal.
+        metrics["train/skipped_updates"] = bad_grads
         for key, value in losses.apply(
                 lambda x: x.float().mean(), batch_size=[]).items():
             metrics[f"train/{key}"] = value.item()
