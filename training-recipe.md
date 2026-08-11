@@ -81,15 +81,25 @@ source rather than the symptom.
 not the best one.** An earlier checkpoint beat the final one **four separate
 times**, once by 58.3% over a thousand duels. And 590M frames beyond 1B bought a
 57.4% head-to-head edge over the policy they started from, an order of magnitude
-less than a single collision fix delivered. Both warm restarts also knocked the
-policy down before it recovered, to 41.6% and 28.6% against the field, taking
-~200M frames each time to climb back.
+less than a single collision fix delivered. Every warm start also dips before it
+recovers: 100M frames in, the continuation scored **37.6%** against the very
+checkpoint it started from.
 
-*Not yet established:* we suspect the restart itself, because `init_checkpoint`
-restarts the learning-rate anneal at full strength on an already-converged
-policy. A control run at a constant reduced rate is testing that and has not
-finished, so treat the mechanism as a hypothesis and the two knock-downs as the
-only measured facts here.
+We assumed that dip was damage done by restarting the learning-rate anneal at
+full strength on a converged policy, and ran the control: same start, same seed,
+same 300M budget, constant `lr=1e-4` with no annealing. **The hypothesis was
+wrong, twice over.**
+
+| vs the shared starting checkpoint | +100M | +200M | +300M |
+| --- | --- | --- | --- |
+| default schedule (3e-4, annealed) | 37.6% | **83.2%** | 74.2% |
+| constant reduced rate (1e-4) | 33.9% | 59.9% | 53.0% |
+
+The reduced rate did not prevent the dip; it was marginally deeper. And the
+default schedule beat it at every matched point head to head (67.1%, 63.5%,
+63.7%, all past 6 sigma). So the dip is not damage from the restart, it is the
+policy moving off the optimum it had settled into, and the run that moves further
+comes back higher. Lowering the learning rate just learns less.
 
 **The common thread:** in nearly every case above, the instrument was silent. A
 test that passed whatever the code did, a win rate that was a constant by
@@ -194,19 +204,21 @@ MUJOCO_GL=egl uv run python tools/render_progression.py checkpoints/sumo1/ppo_ev
 
 ### Optional: continue past 1B
 
-There is headroom, but both of our warm restarts knocked the policy down first,
-to 41.6% and 28.6% against the field, costing ~200M frames each to recover. The
-suspected cause is that `init_checkpoint` restarts the learning-rate anneal at
-full strength on an already-converged policy; that is untested, so the command
-below is the control, not a proven recipe. Continue at a constant, reduced rate:
+Use the **default schedule**. It is tempting to lower the learning rate when
+continuing an already-converged policy, and we measured that against the default
+with everything else held fixed: it is worse at every point (a 63-67% head-to-head
+loss) and it does not avoid the dip it was meant to avoid.
+
+Expect the continuation to score *below* its own starting checkpoint around 100M
+frames in, and to pass it by 200M. That dip is the policy leaving the optimum it
+had settled into, not damage, so do not kill the run when you see it.
 
 ```bash
 MUJOCO_GL=egl uv run python tools/policy_saturation.py checkpoints/sumo1/<best>.pt
 
 MUJOCO_GL=egl uv run python examples/ppo_sumo.py run_name=sumo1_continue \
     env.num_envs=2048 collector.total_frames=300_000_000 \
-    init_checkpoint=checkpoints/sumo1/<best>.pt \
-    loss.anneal_lr=false loss.anneal_clip_epsilon=false optim.lr=1.0e-4
+    init_checkpoint=checkpoints/sumo1/<best>.pt
 ```
 
 ---

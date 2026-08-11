@@ -186,7 +186,13 @@ def main():
         wins[j][i] += b
         played[i][j] += a + b + d
         played[j][i] += a + b + d
-        print(f"  {names[i]:>6} vs {names[j]:<6}  {a:>4} - {b:<4}  ({d} draws)")
+        # flush=True: a tournament runs for many minutes and is usually redirected
+        # to a file or a log, where Python block-buffers stdout in 8 KB chunks. A
+        # whole run's pairing lines fit inside one buffer, so without this nothing
+        # appears until the process exits and there is no way to tell a slow
+        # tournament from a hung one.
+        print(f"  {names[i]:>6} vs {names[j]:<6}  {a:>4} - {b:<4}  ({d} draws)",
+              flush=True)
 
     rate = np.divide(wins, played, out=np.full_like(wins, np.nan), where=played > 0)
     overall = np.nansum(wins, axis=1) / np.maximum(np.nansum(played, axis=1), 1)
