@@ -117,6 +117,14 @@ def test_anchoring_pins_one_competitor_and_shifts_the_rest():
     assert np.allclose(gaps, unanchored - unanchored[2], atol=1e-6)
 
 
+def test_the_default_anchor_rating_is_what_the_tournament_reports():
+    """The floor's rating is the reference every other number is read against, so
+    a silent change to it would reprice a whole leaderboard."""
+    r = fit_ratings(_matrix([[0, 60, 90], [40, 0, 70], [10, 30, 0]]), anchor=2)
+    assert r[2] == pytest.approx(DEFAULT_RATING)
+    assert DEFAULT_RATING == 1000.0
+
+
 def test_a_non_square_matrix_is_refused():
     with pytest.raises(ValueError, match="square"):
         fit_ratings(np.zeros((2, 3)))
