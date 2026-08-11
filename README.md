@@ -17,14 +17,26 @@ uv sync --extra train --extra gpu    # training + MuJoCo-Warp (GPU box)
 ## Quick start
 
 ```python
+import numpy as np
 from automataleague_sumo import make_env, list_environments
 
 print([s.env_id for s in list_environments()])      # ['sumo-1']
 
-env = make_env("sumo-1", robot="g1", backend="cpu")
+env = make_env("sumo-1", robot="g1", backend="cpu")  # one renderable duel
 obs_a, obs_b = env.reset(seed=0)
-(obs_a, obs_b), (rew_a, rew_b), terminated, truncated, info = env.step(act_a, act_b)
+
+# Both sides are ordinary policy rows; you drive each one yourself.
+n = env.scene.a.robot.action_dim                     # 29 for the G1
+for _ in range(100):
+    act_a, act_b = np.zeros(n), np.zeros(n)          # your policy goes here
+    (obs_a, obs_b), (rew_a, rew_b), terminated, truncated, info = env.step(act_a, act_b)
+    if terminated or truncated:
+        print(info["outcome"])                       # 1 = A won, 2 = B won, 3 = draw
+        break
 ```
+
+`backend="warp"` gives the batched GPU version instead, stepping `num_envs`
+duels at once. That is what training uses.
 
 Render preview stills of the arena:
 
@@ -35,8 +47,16 @@ MUJOCO_GL=egl uv run python tools/render_scene.py
 ## The environment: `sumo-1`
 
 A cylindrical dohyo of radius 1.5 m raised 0.3 m above the floor. Both robots
-spawn diametrically opposite at 60% of the ring radius, facing each other, with
+spawn diametrically opposite at 25% of the ring radius, facing each other, with
 per-episode noise on position, heading and joint angles.
+
+That is 0.75 m apart, inside each other's 0.59 m arm reach, which is deliberate
+and is what real sumo does: wrestlers face off at the shikiri lines about 0.7 m
+apart, not across the ring. It is also the only thing giving the reward an
+approach gradient. `push` needs contact, `win` needs a ring-out, and `alive` and
+`centre` are both maximised by standing still in the middle. Spawn them a ring
+apart and two competent standing policies never touch, every episode is a draw,
+and there is nothing to climb out of.
 
 A side loses by leaving the ring radius, by dropping below the platform surface,
 or by going down (base too low, or torso tilted past 50 degrees). A 15 second
@@ -121,58 +141,138 @@ The GPU backend steps `num_envs` parallel **duels**, each duel being one world
 holding both robots. Under self-play the policy batch is twice that, because both
 contestants are ordinary policy rows.
 
+You need a CUDA GPU with MuJoCo-Warp. On a DGX Spark (GB10) at 2048 duels this
+runs about 39k policy rows/s, so **1B frames takes roughly 7.5 hours**. 4096
+duels buys nothing. Every command below is prefixed with `MUJOCO_GL=egl` because
+evaluation renders headlessly.
+
+Each run writes to `checkpoints/<run_name>/`: a `ppo_eval_<frames>.pt` snapshot
+per evaluation, a `ppo_best.pt`, and `metrics.jsonl` with every batch. Keep the
+jsonl. Weights and Biases is on by default (`logger.backend=""` disables it), but
+the local jsonl is what survived the one run where the wandb step counter was
+wrong and a whole 1B-frame run logged as a single row.
+
+### The recipe
+
+Four stages. Each has a gate you should actually check before spending the next
+block of GPU time, because every one of them has silently failed here at least
+once.
+
+**0. Preflight (about two minutes, no training).**
+
 ```bash
-# validate and benchmark the backend before spending GPU hours
-python tools/warp_smoke.py --num-envs 2048
+# does the reward pay for the behaviour you are asking for? exits non-zero if not
+MUJOCO_GL=egl uv run python tools/reward_balance.py
 
-# check the reward actually pays for the behaviour being asked for
-python tools/reward_balance.py
+# what does DOING NOTHING score? a policy below this has learned nothing
+MUJOCO_GL=egl uv run python tools/baselines.py
 
-# find out what "doing nothing" scores, so a training curve can be judged
-python tools/baselines.py
+# contact headroom and A/B symmetry on the GPU backend, at your real batch size
+MUJOCO_GL=egl uv run python tools/warp_smoke.py --num-envs 2048
+```
 
-# can the policy take a hit? a standing pose is not balance
-python tools/push_test.py checkpoints/standing/ppo_best.pt
+**1. Bootstrap standing against a dummy (~50M frames, ~20 min).** Two fresh
+robots both collapse in 1.5 s, which scores as a draw and gives the win term
+nothing to work with, so the robot learns to stand first.
 
-# is the action range large enough for the task to be possible?
-python tools/measure_reach.py
+```bash
+MUJOCO_GL=egl uv run python examples/ppo_sumo.py run_name=standing \
+    env.num_envs=2048 collector.total_frames=50_000_000 \
+    env.arena.opponent=zero env.reward_weights.push=0
+```
 
-# will this policy survive a warm start, or is its mean already saturated?
-python tools/policy_saturation.py checkpoints/run/ppo_eval_290062336.pt
+*Gate:* episode length must beat the `baselines.py` number (~76 steps for the
+G1), and the policy must survive a shove. A held pose is not balance:
 
-# the ONLY absolute progress measure. self-play curves cannot answer this
-python tools/round_robin.py checkpoints/run/ppo_eval_*.pt
+```bash
+MUJOCO_GL=egl uv run python tools/push_test.py checkpoints/standing/ppo_best.pt
+```
+
+**2. Self-play, warm-started from it (1B frames, ~7.5 h).**
+
+```bash
+MUJOCO_GL=egl uv run python examples/ppo_sumo.py run_name=sumo1 \
+    env.num_envs=2048 collector.total_frames=1_000_000_000 \
+    init_checkpoint=checkpoints/standing/ppo_best.pt
+```
+
+*Gate:* nothing in the training curves will tell you whether this worked. See
+stage 3. What you can watch for is `train/saturated_fraction` staying near zero;
+a rising value means the policy is diverging and the run aborts itself.
+
+**3. Find out which checkpoint is actually best.**
+
+```bash
+MUJOCO_GL=egl uv run python tools/round_robin.py checkpoints/sumo1/ppo_eval_*.pt
+MUJOCO_GL=egl uv run python tools/render_progression.py checkpoints/sumo1/ppo_eval_*.pt
+```
+
+> **Do not assume the last checkpoint, or `ppo_best.pt`, is the best one.** In
+> this project the final checkpoint was beaten by an earlier one **four separate
+> times**, once by 58.3% over a thousand duels. `ppo_best.pt` is chosen by a
+> heuristic eval score; the round robin is the measurement. Warm-start the next
+> run from whatever the tournament ranks first, not from the newest file.
+
+**Optional, to push further.** There is headroom past 1B, but a plain warm start
+restarts the learning-rate anneal at full strength on an already-converged policy
+and knocks it down to 28.6% against the field for ~200M frames. Continue at a
+constant, reduced rate instead:
+
+```bash
+MUJOCO_GL=egl uv run python examples/ppo_sumo.py run_name=sumo1_continue \
+    env.num_envs=2048 collector.total_frames=300_000_000 \
+    init_checkpoint=checkpoints/sumo1/<best from the round robin>.pt \
+    loss.anneal_lr=false loss.anneal_clip_epsilon=false optim.lr=1.0e-4
+```
+
+Check the checkpoint you are continuing from is numerically fit to continue:
+
+```bash
+MUJOCO_GL=egl uv run python tools/policy_saturation.py checkpoints/sumo1/<best>.pt
+```
+
+### Configuration
+
+Everything is Hydra. `examples/config_ppo.yaml` is the full list with a comment
+on each; override any of it as `key=value` on the command line. A `null` under
+`env.arena`, `env.reward_weights` or `env.termination` means "keep the registry
+default", so you can change one knob without restating the rest.
+
+| knob | default | when you would change it |
+| --- | --- | --- |
+| `env.num_envs` | 2048 | parallel duels. Lower it if you run out of GPU memory. |
+| `env.arena.opponent` | `self` | `zero` only for the standing bootstrap. |
+| `env.arena.action_scale` | 0.5 | the pose window. **Measure it**, see below. |
+| `env.arena.push_speed` | 1.0 | unobserved shoves. 0 disables (also set the interval to 0). |
+| `env.reward_weights.*` | see table above | whole-episode values. |
+| `collector.total_frames` | 20M | the run length. |
+| `optim.lr` | 3e-4 | reduce for a continuation. |
+| `loss.anneal_lr` | true | set false when continuing a converged policy. |
+| `network.max_loc` | 5.0 | soft bound on the policy mean. Only raise it if a checkpoint you are continuing already exceeds it. |
+| `init_checkpoint` | null | warm start. `init_critic=false` if the reward changed scale. |
+
+### The rest of the toolbox
+
+```bash
+# is the action range large enough for the task to be possible at all?
+MUJOCO_GL=egl uv run python tools/measure_reach.py
 
 # across a chain of warm starts, label by hand: each run restarts its counter
-python tools/round_robin.py 1000M=checkpoints/v6/ppo_eval_1000013824.pt \
+MUJOCO_GL=egl uv run python tools/round_robin.py \
+    1000M=checkpoints/v6/ppo_eval_1000013824.pt \
     1290M=checkpoints/v7/ppo_eval_290062336.pt
 
-# watch what a checkpoint actually does, over 5 duels rather than 1
-python tools/render_policy.py checkpoints/standing/ppo_best.pt -o duel.mp4
-python tools/render_progression.py checkpoints/run/ppo_eval_*.pt
-python tools/render_versus.py old.pt new.pt -o versus.mp4
-
-# bootstrap standing on a fresh robot
-python examples/ppo_sumo.py run_name=standing env.num_envs=2048 \
-    env.arena.opponent=zero env.reward_weights.push=0
-
-# the real game, warm-started from the standing policy
-python examples/ppo_sumo.py env.num_envs=2048 \
-    init_checkpoint=checkpoints/standing/ppo_best.pt
+# watch one checkpoint, or put two against each other
+MUJOCO_GL=egl uv run python tools/render_policy.py checkpoints/sumo1/ppo_best.pt -o duel.mp4
+MUJOCO_GL=egl uv run python tools/render_versus.py old.pt new.pt -o versus.mp4
 ```
 
 ### Bootstrapping standing
 
 Two robots that both collapse in 1.5 s produce nothing but simultaneous losses,
 which score as draws and give the win term nothing to work with. So a fresh robot
-learns to stand first, against a dummy, and self-play warm-starts from that:
-
-```bash
-python examples/ppo_sumo.py run_name=standing env.arena.opponent=zero \
-    env.reward_weights.push=0
-
-python examples/ppo_sumo.py init_checkpoint=checkpoints/standing/ppo_best.pt
-```
+learns to stand first, against a dummy, and self-play warm-starts from that.
+Stages 1 and 2 of the recipe above.
 
 `push` is zeroed for the bootstrap because the dummy's radius is decided by how
 it happens to topple, which the learner cannot influence. Paying for it is pure
@@ -223,9 +323,10 @@ To start tight and loosen, warm-start across runs rather than scheduling inside
 one, since changing the scale changes what the same action numbers mean:
 
 ```bash
-python examples/ppo_sumo.py run_name=tight env.arena.action_scale=0.3
-python examples/ppo_sumo.py run_name=loose env.arena.action_scale=0.6 \
-    init_checkpoint=checkpoints/tight/ppo_best.pt
+MUJOCO_GL=egl uv run python examples/ppo_sumo.py run_name=tight \
+    env.arena.action_scale=0.3
+MUJOCO_GL=egl uv run python examples/ppo_sumo.py run_name=loose \
+    env.arena.action_scale=0.6 init_checkpoint=checkpoints/tight/ppo_best.pt
 ```
 
 ### Judge standing against doing nothing, not against zero
