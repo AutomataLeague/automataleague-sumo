@@ -69,6 +69,10 @@ env = make_env("sumo-1", robot="g1", backend="warp", num_envs=2048)
   in each robot's own base frame. A rigid rotation of the whole arena leaves them unchanged,
   which is what makes **one shared policy valid for both sides**.
 * Override any config field inline, e.g. `make_env("sumo-1", robot="g1", ring_radius=2.0)`.
+* **A duel is always one robot against the same robot.** The robot is the fixed hardware
+  and the policy is what competes, so a matchup measures the algorithm rather than the
+  chassis. Bring any robot you like and run a league in it; just not two different ones in
+  the same ring.
 
 ### No difficulty levels, no opponent pool
 
@@ -168,13 +172,16 @@ around the *home* pose, so one number cannot serve a whole robot: at a uniform 0
 elbows could never get within 45° of straight, and the arms simply hung. Use
 `tools/measure_reach.py` and `RobotSpec.joint_scale` for per-joint multipliers.
 
-**Cross-robot matchups are on the roadmap, not done.** Both backends raise
-`NotImplementedError` when the two sides differ, deliberately: `action_scale` and the
-observation width are currently derived from side A, so a mixed duel would run at the wrong
-scale and quietly produce a meaningless result. The scene layer already composes two
-different robots; what remains is per-side plumbing, a batch layout that does not assume one
-observation width, and two policies instead of one. Tracked in
-[#1](https://github.com/AutomataLeague/automataleague-sumo/issues/1).
+Once your `RobotSpec` exists you can train it, evaluate it and run a full league in it. What
+you cannot do is put **two different robots in the same duel**: both backends raise
+`NotImplementedError` when the sides differ.
+
+That is a rule, not a missing feature. A league is only a fair test of an algorithm if both
+sides run the same hardware; otherwise a result measures the chassis. It is also what keeps
+the design honest, because a single shared policy can drive both contestants only while
+their observation and action widths match. The analysis of what mixed matchups would cost is
+kept in [#1](https://github.com/AutomataLeague/automataleague-sumo/issues/1) if the rule
+ever changes.
 
 ## Adding a custom reward
 
@@ -210,9 +217,6 @@ MUJOCO_GL=egl uv run pytest -m gpu       # + CUDA and mujoco-warp
 
 ## Roadmap
 
-* **Cross-robot matchups** — two different robots in the same duel
-  ([#1](https://github.com/AutomataLeague/automataleague-sumo/issues/1)). The largest gap
-  between what this repo promises and what it does.
 * **An Elo leaderboard** over the round-robin results, so tournaments become comparable
   across runs rather than only within one field.
 * **Opponent posture in the observation.** A policy currently sees only 10 numbers about

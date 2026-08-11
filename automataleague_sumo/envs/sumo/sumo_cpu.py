@@ -46,11 +46,15 @@ class SumoEnvCPU:
         self.model, self.scene = build_sumo_model(robot, opponent_robot, self.cfg)
         if self.scene.a.robot.name != self.scene.b.robot.name:
             raise NotImplementedError(
-                f"SumoEnvCPU currently assumes both sides share a robot "
-                f"(got a={self.scene.a.robot.name!r}, b={self.scene.b.robot.name!r}). "
-                f"action_scale, observation_dim and action_dim are all derived from "
-                f"side A's robot, so a cross-robot matchup with a different action "
-                f"scale or joint count would silently produce a wrong-scale duel."
+                f"A duel is one robot against the SAME robot (got "
+                f"a={self.scene.a.robot.name!r}, b={self.scene.b.robot.name!r}). "
+                f"That is a rule of the competition, not a missing feature: a "
+                f"league only tests the algorithm if both sides run the same "
+                f"hardware, and one shared policy can drive both contestants only "
+                f"while their widths match. action_scale, observation_dim and "
+                f"action_dim all come from side A's robot here, "
+                f"so a mixed duel would silently run at the wrong scale. See "
+                f"github.com/AutomataLeague/automataleague-sumo/issues/1."
             )
         self.data = mujoco.MjData(self.model)
 

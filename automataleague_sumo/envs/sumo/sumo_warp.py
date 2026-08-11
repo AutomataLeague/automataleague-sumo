@@ -75,10 +75,15 @@ class SumoEnvWarp(EnvBase):
         self._mjm, self.scene = build_sumo_model(robot, opponent_robot, self.cfg)
         if self.scene.a.robot.name != self.scene.b.robot.name:
             raise NotImplementedError(
-                f"SumoEnvWarp assumes both sides share a robot (got "
+                f"A duel is one robot against the SAME robot (got "
                 f"a={self.scene.a.robot.name!r}, b={self.scene.b.robot.name!r}). "
-                f"action_scale and the observation width are derived from side A, so "
-                f"a cross-robot matchup would silently run at the wrong action scale."
+                f"That is a rule of the competition, not a missing feature: a "
+                f"league only tests the algorithm if both sides run the same "
+                f"hardware, and one shared policy can drive both contestants only "
+                f"while their widths match. action_scale and the observation "
+                f"width come from side A here, "
+                f"so a mixed duel would silently run at the wrong scale. See "
+                f"github.com/AutomataLeague/automataleague-sumo/issues/1."
             )
         self.robot = self.scene.a.robot
 
