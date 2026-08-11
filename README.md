@@ -137,7 +137,8 @@ MUJOCO_GL=egl uv run python examples/ppo_sumo.py run_name=sumo1 \
 ## Evaluation
 
 ```bash
-MUJOCO_GL=egl uv run python tools/round_robin.py checkpoints/sumo1/ppo_eval_*.pt
+MUJOCO_GL=egl uv run python tools/round_robin.py \
+    baselines/still.pt checkpoints/sumo1/ppo_eval_*.pt
 MUJOCO_GL=egl uv run python tools/render_policy.py checkpoints/sumo1/ppo_best.pt -o duel.mp4
 MUJOCO_GL=egl uv run python tools/render_versus.py old.pt new.pt -o versus.mp4
 ```
@@ -180,6 +181,14 @@ MUJOCO_GL=egl uv run python tools/round_robin.py baselines/still.pt checkpoints/
 They have no weights, no torchrl and no hydra config. `still` does nothing; `lean` leans
 toward the opponent and is **worse than doing nothing** (2.5% against a field where `still`
 scored 22.3%), which is a useful reminder that a plausible idea needs measuring.
+
+The tournament reports a **rating** as well as a win rate. A win rate is relative to the
+field it was measured in — the same checkpoint scored 76.5% and 67.4% against two different
+fields with identical weights — so it cannot be compared across tournaments. Ratings model
+each competitor's strength, and are fitted to the whole result matrix at once rather than
+accumulated match by match, so they do not depend on the order the pairings ran. Include
+`baselines/still.pt` and the scale is pinned to the do-nothing floor at 1000, which makes
+numbers comparable between tournaments rather than only within one.
 
 `tools/` also holds the preflight checks (`reward_balance.py`, `baselines.py`,
 `warp_smoke.py`), the capability measurements (`measure_reach.py`,

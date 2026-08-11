@@ -29,6 +29,7 @@ import os
 import numpy as np
 import torch
 
+from automataleague_sumo.elo import DEFAULT_RATING, fit_ratings
 from automataleague_sumo.envs.registry import get_env_spec
 from automataleague_sumo.envs.sumo.config import RewardConfig, TerminationConfig
 from automataleague_sumo.envs.sumo.observation import observation_dim
@@ -219,6 +220,26 @@ def main():
 
     rate = np.divide(wins, played, out=np.full_like(wins, np.nan), where=played > 0)
     overall = np.nansum(wins, axis=1) / np.maximum(np.nansum(played, axis=1), 1)
+
+    # A win rate is relative to THIS field; the same checkpoint read 76.5% and
+    # 67.4% against two different fields with identical weights. Ratings model
+    # each competitor's strength instead, so they survive the field changing.
+    # Anchored on the do-nothing baseline when it is present, which is what makes
+    # numbers comparable between tournaments rather than only within one.
+    draws = played - wins - wins.T
+    anchor = next((i for i, pol in enumerate(policies)
+                   if pol.info.extra.get("kind") == "still"), None)
+    ratings = fit_ratings(wins, draws, anchor=anchor)
+
+    print("\nrating (Bradley-Terry on the Elo scale"
+          + (f", {names[anchor]} pinned at {DEFAULT_RATING:.0f})" if anchor is not None
+             else ", field centred)"))
+    print(f"{'entrant':>10} {'rating':>8} {'vs field':>9}")
+    for i in np.argsort(-ratings):
+        print(f"{names[i]:>10} {ratings[i]:8.0f} {100 * overall[i]:8.1f}%")
+    if anchor is None:
+        print("  no `still` baseline in this field, so ratings are only "
+              "comparable within it. Add baselines/still.pt to pin the scale.")
 
     print("\nwin rate against the whole field")
     print(f"{'checkpoint':>10} {'win rate':>10}   {'':<24}")
