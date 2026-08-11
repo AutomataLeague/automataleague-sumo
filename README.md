@@ -142,6 +142,33 @@ MUJOCO_GL=egl uv run python tools/render_policy.py checkpoints/sumo1/ppo_best.pt
 MUJOCO_GL=egl uv run python tools/render_versus.py old.pt new.pt -o versus.mp4
 ```
 
+### Entering a policy that this repo did not train
+
+Evaluation runs through a contract, not through our PPO actor, so any algorithm can
+compete. A competitor is anything that maps a batch of observations to a batch of actions:
+
+```python
+from automataleague_sumo.policy import Policy, PolicyInfo, check_policy, register_loader
+
+class MyPolicy(Policy):
+    info = PolicyInfo(env_id="sumo-1", robot="g1", algorithm="sac", label="sac-500M")
+
+    def act(self, observation):        # [B, obs_dim] -> [B, act_dim] in [-1, 1]
+        return self.net(observation).tanh()
+
+register_loader("my-format", lambda path, device: MyPolicy(...))
+```
+
+`automataleague_sumo.policy` imports without torchrl, hydra or mujoco, because a submission
+may use none of them. `check_policy` runs before every tournament and rejects the ways a
+policy can be *quietly* wrong rather than loudly broken: wrong action width, non-finite or
+out-of-range actions, non-determinism, and batch coupling — both robots in a duel share one
+call, so a policy that normalises across the batch makes each robot's action depend on its
+opponent's observation while looking entirely healthy.
+
+Training code for other algorithms does not belong here. This repo ships PPO as the
+reference; bring your own and register a loader.
+
 `tools/` also holds the preflight checks (`reward_balance.py`, `baselines.py`,
 `warp_smoke.py`), the capability measurements (`measure_reach.py`,
 `policy_saturation.py`), and `push_test.py`. Each one exists because it caught a real

@@ -29,12 +29,11 @@ import os
 import numpy as np
 import torch
 from omegaconf import OmegaConf
-from tensordict import TensorDict
-from torchrl.envs import ExplorationType, set_exploration_type
 
+from automataleague_sumo.envs.sumo.observation import observation_dim
 from automataleague_sumo.envs.sumo.termination import R_LOSS, R_WIN
+from automataleague_sumo.policy import check_policy, load_policy
 from automataleague_sumo.robots import get_robot
-from automataleague_sumo.training.models import build_actor
 
 
 def parse_args():
@@ -67,7 +66,7 @@ def label(path: str, frames: int) -> str:
     return path.split("/")[-1].removesuffix(".pt")
 
 
-def duel(env, actor_a, actor_b, max_steps: int) -> tuple[int, int, int]:
+def duel(env, policy_a, policy_b, max_steps: int) -> tuple[int, int, int]:
     """Run one batch of duels to conclusion. Returns (a_wins, b_wins, draws).
 
     Only each world's FIRST conclusion counts. Worlds auto-reset and would
@@ -79,13 +78,13 @@ def duel(env, actor_a, actor_b, max_steps: int) -> tuple[int, int, int]:
     settled = torch.zeros(n, dtype=torch.bool, device=env.device)
     result = torch.zeros(n, dtype=torch.int32, device=env.device)
 
-    with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+    # No exploration-type context and no TensorDict: the policy contract requires
+    # act() to be deterministic already, so an evaluator does not have to know how
+    # a submission implements exploration, or that it uses torchrl at all.
+    with torch.no_grad():
         for _ in range(max_steps):
             obs = td["observation"]
-            act = torch.cat([
-                actor_a(TensorDict({"observation": obs[:n]}, batch_size=[n]))["action"],
-                actor_b(TensorDict({"observation": obs[n:]}, batch_size=[n]))["action"],
-            ], dim=0)
+            act = torch.cat([policy_a.act(obs[:n]), policy_b.act(obs[n:])], dim=0)
             td["action"] = act
             transition, td = env.step_and_maybe_reset(td)
             done = transition["next", "done"].squeeze(-1)[:n]
@@ -158,21 +157,24 @@ def main():
                       nconmax=int(cfg.env.nconmax), njmax=int(cfg.env.njmax))
 
     robot = get_robot(cfg.env.robot)
-    actors, names = [], []
+    # Loaded through the evaluation contract rather than by rebuilding this repo's
+    # PPO actor, so anything satisfying automataleague_sumo.policy can enter a
+    # tournament — a different algorithm, a different network, another repo
+    # entirely. Each artifact still carries its own config, so two checkpoints
+    # that differ in ways that change behaviour (network.max_loc is one) are each
+    # reconstructed as they were trained.
+    policies, names = [], []
     for path in paths:
-        state = torch.load(path, map_location=device, weights_only=False)
-        # Each actor is rebuilt from ITS OWN stored config, not the first
-        # checkpoint's. They differ in ways that change behaviour: a policy
-        # trained with network.max_loc was shaped by that bound, and replaying it
-        # without one produces means it was never trained to emit. Sharing one
-        # config would silently misrepresent every checkpoint but the first.
-        actor = build_actor(OmegaConf.create(state["config"]), robot, device)
-        actor.load_state_dict(state["actor_state_dict"])
-        actor.eval()
-        actors.append(actor)
-        names.append(given.get(path) or label(path, counts[path]))
+        policy = load_policy(path, device)
+        # Validate BEFORE the tournament, not after. A wrong-width, non-finite,
+        # non-deterministic or batch-coupled policy produces a plausible-looking
+        # result rather than an error, and finding that out costs the whole run.
+        check_policy(policy, obs_dim=observation_dim(robot),
+                     act_dim=robot.action_dim, device=device)
+        policies.append(policy)
+        names.append(given.get(path) or policy.info.label)
 
-    k = len(actors)
+    k = len(policies)
     wins = np.zeros((k, k))          # wins[i][j] = duels i won against j
     played = np.zeros((k, k))
     print(f"{k} checkpoints, {args.duels} duels per ordering, "
@@ -181,7 +183,7 @@ def main():
     for i, j in itertools.permutations(range(k), 2):
         # Both orderings are run, so any residual advantage to being side A
         # cancels instead of being read as one checkpoint beating another.
-        a, b, d = duel(env, actors[i], actors[j], tc.max_episode_steps)
+        a, b, d = duel(env, policies[i], policies[j], tc.max_episode_steps)
         wins[i][j] += a
         wins[j][i] += b
         played[i][j] += a + b + d

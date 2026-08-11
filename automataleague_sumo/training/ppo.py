@@ -18,7 +18,9 @@ from torchrl.objectives import ClipPPOLoss, group_optimizers
 from torchrl.objectives.value.advantages import GAE
 from torchrl.record.loggers import generate_exp_name, get_logger
 
+from automataleague_sumo import __version__
 from automataleague_sumo.envs.sumo.termination import R_DRAW, R_LOSS, R_WIN
+from automataleague_sumo.training import policy_ppo
 from automataleague_sumo.training.env import log_metrics, make_environment
 from automataleague_sumo.training.models import make_ppo_models
 
@@ -163,6 +165,15 @@ def _save(path, actor, critic, collected_frames, cfg):
         "critic_state_dict": critic.state_dict(),
         "collected_frames": collected_frames,
         "config": dict(cfg),
+        # Which contract this artifact satisfies, so an evaluator can load it
+        # without knowing it came from here. See automataleague_sumo/policy.py.
+        "format": policy_ppo.FORMAT,
+        # The task itself has changed under us before: correcting the G1's
+        # collision model added 56% more contact and made policies from either
+        # side of that change incomparable, with nothing in any metric to say so.
+        # A rating that mixes versions is meaningless, so the version travels
+        # with the weights.
+        "env_version": __version__,
     }, path)
 
 
