@@ -27,6 +27,14 @@ Headless rendering needs a GL backend: `MUJOCO_GL=egl`.
 
 ## The sumo environment
 
+<p align="center">
+  <img src="assets/sumo_env.png" alt="Three frames of a sumo duel: the face-off, the clinch, and the ring-out" width="820">
+</p>
+
+<p align="center">
+  <sub>One real duel driven by the trained policy, 71 steps (1.4 s). Side A wears blue, side B red.</sub>
+</p>
+
 The task lives in `automataleague_sumo/envs/sumo/`. Environments are named and versioned in
 a registry (`automataleague_sumo/envs/registry.py`) and imported by id.
 
