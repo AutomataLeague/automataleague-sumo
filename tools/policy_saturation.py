@@ -115,8 +115,8 @@ def main():
         print(f"so a single update would have to move it by {headroom:.1f} to "
               f"overflow. Headroom, not safety.")
     else:
-        print(f"which ALONE exceeds it. Any shift in the mean overflows the ratio "
-              f"and the loss is infinite.")
+        print("which ALONE exceeds it. Any shift in the mean overflows the ratio "
+              "and the loss is infinite.")
     raise SystemExit(0 if lp.max() < OVERFLOW else 1)
 
 

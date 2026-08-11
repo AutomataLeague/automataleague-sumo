@@ -134,8 +134,23 @@ python tools/baselines.py
 # can the policy take a hit? a standing pose is not balance
 python tools/push_test.py checkpoints/standing/ppo_best.pt
 
-# watch what a checkpoint actually does
+# is the action range large enough for the task to be possible?
+python tools/measure_reach.py
+
+# will this policy survive a warm start, or is its mean already saturated?
+python tools/policy_saturation.py checkpoints/run/ppo_eval_290062336.pt
+
+# the ONLY absolute progress measure. self-play curves cannot answer this
+python tools/round_robin.py checkpoints/run/ppo_eval_*.pt
+
+# across a chain of warm starts, label by hand: each run restarts its counter
+python tools/round_robin.py 1000M=checkpoints/v6/ppo_eval_1000013824.pt \
+    1290M=checkpoints/v7/ppo_eval_290062336.pt
+
+# watch what a checkpoint actually does, over 5 duels rather than 1
 python tools/render_policy.py checkpoints/standing/ppo_best.pt -o duel.mp4
+python tools/render_progression.py checkpoints/run/ppo_eval_*.pt
+python tools/render_versus.py old.pt new.pt -o versus.mp4
 
 # bootstrap standing on a fresh robot
 python examples/ppo_sumo.py run_name=standing env.num_envs=2048 \
@@ -330,16 +345,110 @@ and driving its opponent twice as far. It now scores episode length only against
 a dummy, and against a real opponent scores how far the loser is driven and how
 decisive the duels are.
 
+## Measuring progress: the round robin
+
+Self-play metrics cannot say whether a policy improved. `tools/round_robin.py`
+plays every checkpoint against every other, both orderings so any side advantage
+cancels, counting only each world's **first** conclusion because worlds auto-reset
+and fast pairings would otherwise be over-weighted. It costs about four minutes
+against a seven-hour run, so it should gate a run rather than follow one.
+
+It has caught, in this project alone: a training ceiling twice at the same place,
+which turned "needs more frames" into a specific hypothesis about the environment;
+that `ppo_best.pt` was a stalemating checkpoint from a third of the way in; and
+that the final checkpoint is not the best, four times.
+
+**A field win rate is only meaningful relative to its field.** The average across
+participants is 50% by construction, so adding stronger checkpoints moves
+everyone. The same 1000M checkpoint scored 76.5% against one field and 67.4%
+against another, with identical weights. Only a **head to head** between two named
+policies is invariant, which is what any claim of improvement should quote.
+
+**Transitivity** is reported alongside: the count of ordered triples where A beats
+B, B beats C and C beats A. Measured 0 of 336 and 0 of 504 across separate runs.
+No cycling means improvement is a strict ordering, so training against the current
+policy alone suffices and an opponent pool would buy nothing. That is the evidence
+for the design decision rather than an argument for it.
+
+## Results
+
+**The vendored collision model was missing 56% of contact.** Menagerie's
+`g1_mjx.xml` is stripped for *locomotion*, where only the feet touch anything. For
+wrestling that is exactly backwards. 12 of 30 bodies had no collision geom at all,
+including both shoulders and both forearms, and the head sphere sat 45 mm high
+covering only the top 57%. Replaying one policy through both models: 1877 → 4225
+robot-to-robot contacts. This **capped training**: two separate 1B-frame runs
+plateaued at ~58% win rate. After grafting five primitives per robot in
+`RobotSpec.extra_colliders` (mass 0, `assets/` untouched), the curve climbs
+monotonically to 76.5% and the new policy beats the old champion 910 to 106.
+
+**Audit a vendored asset against your task, not the one it shipped for.**
+
+**Past 1B frames there is headroom, but a warm restart costs most of it.** A
+lineage of 1000M → 1290M → 1590M cumulative frames, scored by round robin:
+
+| | head to head | duels | significance |
+| --- | --- | --- | --- |
+| best of the continuation (1490M) vs 1000M | **57.4%** | 1013 | +4.7σ |
+| final checkpoint (1590M) vs 1000M | 47.9% | 1016 | −1.3σ |
+| 1490M vs the final 1590M | 58.3% | 1007 | +5.3σ |
+
+So 590M further frames bought a real but modest gain, an order of magnitude
+smaller than the collision fix, and the run's *last* checkpoint was no better than
+its start. Each warm restart also knocked the policy down hard, to 28.6% against
+the field, taking ~200M frames to recover. `init_checkpoint` restarts the
+learning-rate anneal at full strength on an already-converged policy.
+
+## Numerical stability
+
+Three runs died on non-finite numbers, and every one traced to a single unbounded
+quantity: the **pre-squash mean** of the TanhNormal policy.
+
+Its log-prob carries a `-log(1 - a²)` jacobian that grows without limit as an
+action approaches the bound. Nothing bounded `loc`, so a rare state could drive
+the mean tens of units past saturation, where it commands no additional motion
+but inflates log-prob into the thousands. The importance ratio is
+`exp(new_log_prob − old_log_prob)`, and float32 `exp` overflows at 88. A
+diagnostic dump caught a stored log-prob of **3427** with the network otherwise
+healthy: entropy 8.39, σ 0.43, explained variance 0.80.
+
+`BoundedLocNormalScale` applies `max_loc * tanh(loc / max_loc)`. It is absent by
+default, so checkpoints saved before it replay bit-identically.
+
+- **TorchRL's `ClipPPOLoss` bounds the ratio on only one branch.** `gain1` uses an
+  unclamped `log_weight.exp()`, and PPO's pessimistic `min` selects it exactly
+  when the advantage is negative. An overflowing ratio bypasses the clip entirely.
+- **Do not fix this by clamping.** `torch.clamp` has zero gradient outside its
+  range, so it deletes the corrective force on the samples that most need pulling
+  back, and it is self-reinforcing. Clamping the importance ratio destroyed a run
+  far more thoroughly than the overflow it prevented: within 13M frames every
+  sample was clamped, the policy gradient was identically zero, the entropy bonus
+  ran unopposed and σ collapsed 0.36 → 0.0027 over 40M frames. Use a smooth squash
+  or skip the update.
+- **A non-finite loss skips the minibatch**; a non-finite *gradient norm* skips
+  too, because `clip_grad_norm_` returns the norm before clipping and would
+  otherwise scale every parameter by an infinity. Either one aborts after 25
+  consecutive.
+- **`train/saturated_fraction`** reports ratios beyond e²⁰, and 2 consecutive
+  batches over 25% aborts. A policy that disowns the data it just collected has
+  diverged.
+
+**None of this was visible in the training curves.** During the worst collapse
+`train/reward` *rose* from −1.46 to −0.54, because episodes ending in 15 steps
+instead of 96 accrue less of the per-episode shaping cost, and `skipped_updates`
+stayed at 0.
+
 ## Status
 
-Phases A and B are complete: arena, task logic, CPU duel backend, registry.
-Phase C has the batched MuJoCo-Warp backend, the PPO stack, and **standing
-solved**: 750 of 750 steps, and robust to a 1.0 m/s shove in 6 of 6 seeds. That
-policy drives both robots unchanged.
+Arena, task logic, both backends, the PPO stack and the tournament are complete.
+Standing is solved (750 of 750 steps, robust to a 1.0 m/s shove in 6 of 6 seeds)
+and self-play produces real grappling, with the robots using their arms to control
+the opponent. `action_scale` is measured, per joint.
 
-Still to come: a measured `action_scale` to replace the provisional 0.5, a
-self-play run long enough to say anything about fighting, and the Elo
-leaderboard.
+Still to come: **cross-robot matchups** (both backends raise `NotImplementedError`
+when the two sides differ, which is the largest gap against the original brief),
+the Elo leaderboard, and opponent posture in the observation — the policy currently
+sees only 10 numbers about its opponent and nothing about its joint state or lean.
 
 ## Licence
 

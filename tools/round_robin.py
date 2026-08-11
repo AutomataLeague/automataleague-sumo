@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import os
 
 import numpy as np
 import torch
@@ -39,7 +40,9 @@ from automataleague_sumo.training.models import build_actor
 def parse_args():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("checkpoints", nargs="+")
+    p.add_argument("checkpoints", nargs="+",
+                   help="paths, or LABEL=path to name and order them by hand "
+                        "(needed across warm starts, whose frame counters reset)")
     p.add_argument("--duels", type=int, default=256,
                    help="simultaneous duels per ordered pairing")
     p.add_argument("--max-checkpoints", type=int, default=10,
@@ -104,9 +107,37 @@ def main():
     # ppo_eval_100007936 (100M) before ppo_eval_10027008 (10M), which makes an
     # "evenly spaced" subsample a lopsided one and quietly ruins the progress
     # curve this tool exists to draw.
-    unique = sorted(set(args.checkpoints))
-    counts = {path: frames_of(path) for path in unique}
-    paths = sorted(unique, key=lambda p: (counts[p], p))
+    # `LABEL=path` overrides both the name and the ordering. A warm-started run
+    # restarts its own frame counter, so a lineage spanning three runs sorts and
+    # labels wrongly by collected_frames alone: v6's 1000M would sort AFTER v8's
+    # 300M even though v8 continues from it. Explicit labels are the only honest
+    # way to draw a progress curve across a chain of warm starts.
+    entries, explicit = [], False
+    for arg in args.checkpoints:
+        name, sep, path = arg.partition("=")
+        if sep and os.path.exists(path):
+            entries.append((name, path))
+            explicit = True
+        else:
+            entries.append((None, arg))
+    if explicit and any(name is None for name, _ in entries):
+        raise SystemExit(
+            "label every checkpoint as LABEL=path or none of them; a mix would "
+            "order the labelled ones by hand and the rest by frame count")
+
+    if explicit:
+        seen, paths, given = set(), [], {}
+        for name, path in entries:
+            if path not in seen:
+                seen.add(path)
+                paths.append(path)
+                given[path] = name
+        counts = {path: frames_of(path) for path in paths}
+    else:
+        unique = sorted({path for _, path in entries})
+        counts = {path: frames_of(path) for path in unique}
+        paths = sorted(unique, key=lambda p: (counts[p], p))
+        given = {}
     if len(paths) > args.max_checkpoints:
         idx = np.linspace(0, len(paths) - 1, args.max_checkpoints).round().astype(int)
         paths = [paths[i] for i in sorted(set(idx))]
@@ -130,11 +161,16 @@ def main():
     actors, names = [], []
     for path in paths:
         state = torch.load(path, map_location=device, weights_only=False)
-        actor = build_actor(cfg, robot, device)
+        # Each actor is rebuilt from ITS OWN stored config, not the first
+        # checkpoint's. They differ in ways that change behaviour: a policy
+        # trained with network.max_loc was shaped by that bound, and replaying it
+        # without one produces means it was never trained to emit. Sharing one
+        # config would silently misrepresent every checkpoint but the first.
+        actor = build_actor(OmegaConf.create(state["config"]), robot, device)
         actor.load_state_dict(state["actor_state_dict"])
         actor.eval()
         actors.append(actor)
-        names.append(label(path, counts[path]))
+        names.append(given.get(path) or label(path, counts[path]))
 
     k = len(actors)
     wins = np.zeros((k, k))          # wins[i][j] = duels i won against j
