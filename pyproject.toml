@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Two humanoid robots wrestle to push each other out of a circle, in MuJoCo, trained with TorchRL."
 readme = "README.md"
 requires-python = ">=3.10"
+license = { file = "LICENSE" }
 
 # Core. Torch is core (not an extra) because the task logic is written in tensors
 # and the CPU test suite exercises it without any training dependency.

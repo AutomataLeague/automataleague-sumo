@@ -203,6 +203,11 @@ MUJOCO_GL=egl uv run pytest              # CPU suite
 MUJOCO_GL=egl uv run pytest -m gpu       # + CUDA and mujoco-warp
 ```
 
+## Licence
+
+Apache-2.0, see [LICENSE](LICENSE). Vendored robot models keep their upstream
+licences.
+
 ## Credits
 
 * G1 model © Unitree Robotics, from MuJoCo Menagerie (BSD 3-Clause). See
