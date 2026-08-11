@@ -22,7 +22,11 @@ from torchrl.data import Bounded, Composite  # noqa: E402
 from torchrl.modules import MLP, ProbabilisticActor, TanhNormal, ValueOperator  # noqa: E402
 from torchrl.objectives import ClipPPOLoss  # noqa: E402
 
-from automataleague_sumo.training.ppo import _MAX_LOG_WEIGHT, BoundedRatioPPOLoss  # noqa: E402
+from automataleague_sumo.training.ppo import (  # noqa: E402
+    _LOG_WEIGHT_ALARM,
+    _SATURATION_ABORT_FRACTION,
+    SaturationCountingPPOLoss,
+)
 
 OBS_DIM, ACT_DIM, BATCH = 6, 3, 16
 
@@ -100,48 +104,69 @@ def test_stock_clip_ppo_loss_survives_the_same_ratio_when_the_advantage_is_posit
     assert torch.isfinite(loss_module(batch)["loss_objective"])
 
 
-def test_bounded_ratio_loss_stays_finite_on_the_batch_that_killed_the_run():
+def test_counting_never_changes_the_loss():
+    """The regression test for the worst bug this loop has had.
+
+    A previous version of this class clamped log_weight to bound the ratio. It
+    bounded it, and because torch.clamp has zero gradient outside its range it
+    also deleted the policy gradient on every saturated sample. The entropy bonus
+    ran unopposed, the actor's scale collapsed 0.36 -> 0.0027 and 30M frames were
+    trained on garbage while train/reward ROSE. The class is now observation only,
+    and this asserts it on the exact batch that used to be altered.
+    """
+    for stale in (-500.0, -3.0, 0.0):
+        for advantage in (-1.0, 1.0):
+            torch.manual_seed(0)
+            stock = _build_loss(ClipPPOLoss)
+            torch.manual_seed(0)
+            counting = _build_loss(SaturationCountingPPOLoss)
+            torch.manual_seed(1)
+            batch = _batch(stock, stale_log_prob=stale, advantage=advantage)
+            a = stock(batch.clone())["loss_objective"]
+            b = counting(batch.clone())["loss_objective"]
+            assert torch.equal(a, b), (
+                f"loss changed at stale={stale} advantage={advantage}: {a} vs {b}")
+
+
+def test_the_counter_sees_the_runaway_it_must_not_fix():
+    """Counting has to fire on exactly the batch the loss cannot survive.
+
+    A counter that stayed silent here would leave the divergence abort blind, and
+    the abort is the only thing standing between a diverged policy and 30M frames
+    of garbage checkpoints.
+    """
     torch.manual_seed(0)
-    loss_module = _build_loss(BoundedRatioPPOLoss)
+    loss_module = _build_loss(SaturationCountingPPOLoss)
     batch = _batch(loss_module, stale_log_prob=-500.0, advantage=-1.0)
-    out = loss_module(batch)
-    assert torch.isfinite(out["loss_objective"])
-    assert torch.isfinite(out["loss_critic"])
+    # Unchanged from stock: still non-finite. The training loop skips it.
+    assert not torch.isfinite(loss_module(batch)["loss_objective"])
     assert loss_module.pop_saturated() == BATCH
 
 
-def test_bounded_ratio_loss_is_identical_inside_the_trust_region():
-    """The clamp must be inert for any update PPO would actually take.
-
-    A backstop that changed ordinary updates would be a silent second clip, and
-    its effect would be indistinguishable from a hyperparameter change.
-    """
+def test_the_counter_stays_quiet_on_a_healthy_batch():
+    """Otherwise the divergence abort would kill every run it was added to."""
     torch.manual_seed(0)
-    stock = _build_loss(ClipPPOLoss)
-    torch.manual_seed(0)
-    bounded = _build_loss(BoundedRatioPPOLoss)
-
-    torch.manual_seed(1)
-    batch = _batch(stock, stale_log_prob=-3.0, advantage=-1.0)
-    a = stock(batch.clone())["loss_objective"]
-    b = bounded(batch.clone())["loss_objective"]
-    assert torch.equal(a, b), f"clamp changed a healthy update: {a} vs {b}"
-    assert bounded.pop_saturated() == 0
+    loss_module = _build_loss(SaturationCountingPPOLoss)
+    loss_module(_batch(loss_module, stale_log_prob=-3.0, advantage=-1.0))
+    assert loss_module.pop_saturated() == 0
 
 
 def test_pop_saturated_resets():
     """A count that never resets turns into a cumulative total in the metrics,
     where a single early spike would read as a permanently unhealthy run."""
     torch.manual_seed(0)
-    loss_module = _build_loss(BoundedRatioPPOLoss)
+    loss_module = _build_loss(SaturationCountingPPOLoss)
     loss_module(_batch(loss_module, stale_log_prob=-500.0, advantage=-1.0))
     assert loss_module.pop_saturated() == BATCH
     assert loss_module.pop_saturated() == 0
 
 
-def test_max_log_weight_cannot_overflow_float32():
-    """exp() of the bound must be representable, or the clamp achieves nothing."""
-    assert torch.exp(torch.tensor(_MAX_LOG_WEIGHT, dtype=torch.float32)).isfinite()
-    # And it must stay far outside any trust region a run could configure, so it
-    # never becomes a clip in disguise.
-    assert _MAX_LOG_WEIGHT > 10.0
+def test_the_alarm_threshold_is_far_outside_any_trust_region():
+    """The alarm must never fire on an update PPO would consider reasonable.
+
+    clip_epsilon is at most a few tenths, so a log ratio of 20 is orders of
+    magnitude beyond anything a healthy run produces. A threshold near the clip
+    range would make the divergence abort fire on ordinary training.
+    """
+    assert _LOG_WEIGHT_ALARM > 10.0
+    assert 0.0 < _SATURATION_ABORT_FRACTION < 1.0

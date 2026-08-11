@@ -42,6 +42,12 @@ def outcome_rates(codes: torch.Tensor) -> dict[str, float]:
 
 _MAX_CONSECUTIVE_BAD_UPDATES = 25
 
+# A batch where most importance ratios are absurd is a diverged policy, not a
+# rough patch. Two consecutive such batches, rather than one, so a single violent
+# update that the next batch recovers from does not end a run.
+_SATURATION_ABORT_FRACTION = 0.25
+_MAX_CONSECUTIVE_SATURATED_BATCHES = 2
+
 # exp() of a float32 log-ratio overflows to inf above ~88, and TorchRL bounds the
 # ratio on only ONE of PPO's two branches. In `ClipPPOLoss`:
 #
@@ -60,16 +66,42 @@ _MAX_CONSECUTIVE_BAD_UPDATES = 25
 # 0.9999990 sits deep in the saturation, where log_prob is dominated by the
 # -log(1 - a^2) jacobian and is violently sensitive to a small shift in the mean.
 #
-# 20 is a numerical backstop, not a second clip. It admits ratios up to 4.9e8,
-# eight orders of magnitude outside the 1 +- clip_epsilon trust region, so every
-# update PPO would consider reasonable is bit-identical with and without it.
-# Samples beyond it lose their gradient, which is the point: a ratio of e^20
-# against a normalised advantage sets the direction of the entire batch on its own.
-_MAX_LOG_WEIGHT = 20.0
+# DO NOT CLAMP log_weight TO FIX THIS. That was tried, and it destroyed a run
+# far more thoroughly than the overflow it prevented.
+#
+# `torch.clamp` has ZERO gradient outside its range, so clamping removes the
+# corrective force on exactly the samples whose ratios have run away — the ones
+# PPO most needs to pull back. It is self-reinforcing: a few clamped samples let
+# the policy step somewhere it should not, which saturates more samples, which
+# removes more of the gradient. Measured, against an unclamped run warm-started
+# from the same checkpoint with the same seed:
+#
+#     frames   unclamped            clamped
+#      6.7M    healthy              9 saturated samples, healthy
+#     13.2M    ep_len 113, healthy  ep_len 26, ALL 253952 samples saturated
+#     40.8M    (not reached)        ep_len 15, entropy loss -2.1e17, sigma 0.0027
+#
+# With every sample clamped the policy gradient is identically zero, leaving the
+# entropy bonus and critic unopposed; the actor's scale collapsed monotonically
+# (0.36 -> 0.0027) while its mean head grew without bound. sigma held at 0.36-0.39
+# across a full 1B run and across 290M of its parent, so this was new.
+#
+# The overflow is instead handled where it belongs, in the training loop: a
+# non-finite loss skips that minibatch. Every other sample keeps its gradient and
+# nothing is silently zeroed.
+#
+# 20 remains the threshold at which a ratio is *reported* as absurd: it is e^20,
+# eight orders of magnitude outside the 1 +- clip_epsilon trust region.
+_LOG_WEIGHT_ALARM = 20.0
 
 
-class BoundedRatioPPOLoss(ClipPPOLoss):
-    """``ClipPPOLoss`` whose importance ratio cannot overflow to infinity."""
+class SaturationCountingPPOLoss(ClipPPOLoss):
+    """``ClipPPOLoss`` that reports how many importance ratios ran away.
+
+    Observation only. It must never alter the loss, because the one time this
+    class changed a number it cost 40M frames — see the note above and
+    ``test_counting_never_changes_the_loss``.
+    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -77,17 +109,16 @@ class BoundedRatioPPOLoss(ClipPPOLoss):
 
     def _log_weight(self, *args, **kwargs):
         out = super()._log_weight(*args, **kwargs)
-        log_weight = out[0]
         # Counted on device and summed across minibatches; `pop_saturated` does
         # the single host sync per collector batch. Reading it here would sync
         # once per minibatch, which is 32 stalls a batch to log one integer.
         with torch.no_grad():
-            n = (log_weight.abs() > _MAX_LOG_WEIGHT).sum()
+            n = (out[0].abs() > _LOG_WEIGHT_ALARM).sum()
             self._saturated = n if self._saturated is None else self._saturated + n
-        return (log_weight.clamp(-_MAX_LOG_WEIGHT, _MAX_LOG_WEIGHT), *out[1:])
+        return out
 
     def pop_saturated(self) -> int:
-        """Samples clamped since the last call, and reset."""
+        """Runaway ratios seen since the last call, and reset."""
         count = 0 if self._saturated is None else int(self._saturated)
         self._saturated = None
         return count
@@ -179,7 +210,7 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="pp
 
     adv_module = GAE(gamma=cfg.loss.gamma, lmbda=cfg.loss.gae_lambda,
                      value_network=critic, average_gae=False, device=device)
-    loss_module = BoundedRatioPPOLoss(
+    loss_module = SaturationCountingPPOLoss(
         actor_network=actor, critic_network=critic,
         clip_epsilon=cfg.loss.clip_epsilon, loss_critic_type=cfg.loss.loss_critic_type,
         entropy_coeff=cfg.loss.entropy_coeff, critic_coeff=cfg.loss.critic_coeff,
@@ -210,12 +241,15 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="pp
         (int(total_frames) // frames_per_batch) * cfg.loss.ppo_epochs * num_mini_batches, 1)
 
     ppo_epochs = int(cfg.loss.ppo_epochs)
+    # Every sample is re-evaluated once per epoch, so this is the denominator
+    # the saturation count has to be read against.
+    evaluations_per_batch = frames_per_batch * ppo_epochs
     losses = TensorDict(batch_size=[ppo_epochs, num_mini_batches])
 
     start_time = time.time()
     collected_frames = 0
     num_network_updates = 0
-    bad_updates = consecutive_bad = 0
+    bad_updates = consecutive_bad = consecutive_saturated = 0
     best_score = float("-inf")
     pbar = tqdm.tqdm(total=int(total_frames))
     td = train_env.reset()
@@ -334,10 +368,31 @@ def run_ppo(cfg, *, total_frames, init_ckpt=None, init_critic=True, run_name="pp
         # rising fraction of its updates is diverging, and that is visible here
         # long before it becomes fatal.
         metrics["train/skipped_updates"] = bad_updates
-        # Ratios so far outside the trust region that they were clamped to stay
-        # finite. Nonzero is not fatal, but a rising count is the policy taking
-        # steps it cannot justify, visible long before anything overflows.
-        metrics["train/saturated_ratios"] = loss_module.pop_saturated()
+        # Ratios so far outside the trust region that the policy cannot justify
+        # the step it took. A handful is noise; a large FRACTION of the batch
+        # means the current policy disowns the data it just collected, which is
+        # divergence however finite every individual number still looks.
+        saturated = loss_module.pop_saturated()
+        metrics["train/saturated_ratios"] = saturated
+        metrics["train/saturated_fraction"] = saturated / evaluations_per_batch
+        # This is the guard that was missing. The run this was written for spent
+        # 30M frames with EVERY ratio saturated, episode length collapsing 96 to
+        # 15 and the entropy loss growing tenfold every 3M frames, while
+        # train/reward ROSE from -1.46 to -0.54 (shorter episodes accrue less of
+        # the per-episode shaping cost) and skipped_updates sat at 0. Nothing
+        # already logged said anything was wrong.
+        if saturated > _SATURATION_ABORT_FRACTION * evaluations_per_batch:
+            consecutive_saturated += 1
+            if consecutive_saturated >= _MAX_CONSECUTIVE_SATURATED_BATCHES:
+                raise FloatingPointError(
+                    f"{consecutive_saturated} consecutive batches with over "
+                    f"{100 * _SATURATION_ABORT_FRACTION:.0f}% of importance "
+                    f"ratios beyond e^{_LOG_WEIGHT_ALARM:.0f} at "
+                    f"{collected_frames:,} frames. The policy has diverged from "
+                    f"the data it collected; continuing only produces garbage "
+                    f"checkpoints. Last metrics: {json.dumps(metrics)}")
+        else:
+            consecutive_saturated = 0
         for key, value in losses.apply(
                 lambda x: x.float().mean(), batch_size=[]).items():
             metrics[f"train/{key}"] = value.item()
