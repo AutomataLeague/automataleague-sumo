@@ -82,6 +82,13 @@ network:
   device: cuda:0
   activation: elu
   hidden_sizes: [512, 256, 128]
+  # Soft bound on the pre-squash mean, applied as max_loc * tanh(loc / max_loc).
+  # tanh(3) is already 0.995, so nothing past ~3 commands additional motion, and
+  # an unbounded mean is what let a stored log-prob reach 3427 and overflow the
+  # importance ratio. Measured on a healthy 290M checkpoint: median |loc| 0.36,
+  # 99th percentile 2.07, max 3.62, so 5 leaves the working range untouched.
+  # tools/policy_saturation.py measures this on a checkpoint.
+  max_loc: 5.0
 
 logger:
   backend: wandb          # "" disables logging entirely

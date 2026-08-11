@@ -22,6 +22,49 @@ def get_activation(name: str):
     return _ACTIVATIONS[name]
 
 
+class BoundedLocNormalScale(AddStateIndependentNormalScale):
+    """Add the state-independent scale, and keep the mean in a finite range.
+
+    Subclassed rather than inserted as its own ``Sequential`` entry so the module
+    indices and the ``state_independent_scale`` parameter name are unchanged: a
+    new entry would shift every key and no existing checkpoint would load.
+
+    The policy is a TanhNormal, so its log-prob carries a ``-log(1 - a^2)``
+    jacobian that grows without limit as the action approaches the bound. Nothing
+    bounded ``loc``, and three runs of this project died on that: the importance
+    ratio is ``exp(new_log_prob - old_log_prob)``, which overflows float32 above
+    88, and a diagnostic dump caught a stored log-prob of 3427 while every other
+    quantity in the network was healthy (entropy 8.39, sigma 0.43, explained
+    variance 0.80). A log-prob that size needs a mean tens of units outside the
+    tanh range, where it commands no additional motion whatsoever.
+
+    ``limit * tanh(x / limit)`` and NOT ``x.clamp(-limit, limit)``. clamp has zero
+    gradient outside its range, so it would stop pulling the mean back at exactly
+    the point that matters. That is not hypothetical: clamping the importance
+    ratio for the same reason silently destroyed a 40M-frame run by deleting the
+    policy gradient on every saturated sample. This is smooth, its gradient is
+    positive everywhere, and it is near-inert in the range a healthy policy uses
+    (measured on a 290M-frame checkpoint: median |loc| 0.36, 99th percentile 2.07,
+    max 3.62 against the default limit of 5).
+
+    ``limit=None`` disables the bound entirely, which is what a checkpoint saved
+    before ``network.max_loc`` existed gets. Those checkpoints are replayed for
+    renders and the round robin, and a policy that behaves differently on replay
+    than it did when trained would invalidate every comparison already made.
+    """
+
+    def __init__(self, *args, limit: float | None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if limit is not None and limit <= 0:
+            raise ValueError(f"network.max_loc must be > 0 or None, got {limit}")
+        self.limit = None if limit is None else float(limit)
+
+    def forward(self, loc, *others):
+        if self.limit is not None:
+            loc = self.limit * torch.tanh(loc / self.limit)
+        return super().forward(loc, *others)
+
+
 def build_actor(cfg, robot, device):
     """Rebuild the actor from a robot spec alone, with no live GPU env.
 
@@ -77,7 +120,13 @@ def make_ppo_models(cfg, train_env, device):
 
     policy_mlp = torch.nn.Sequential(
         policy_mlp,
-        AddStateIndependentNormalScale(num_outputs, scale_lb=1e-8).to(device),
+        # `.get` defaulting to None, not attribute access: checkpoints saved
+        # before max_loc existed carry their own config and are reloaded for
+        # rendering and the round robin. They must both keep loading AND keep
+        # behaving exactly as they did when trained, so they get no bound.
+        BoundedLocNormalScale(
+            num_outputs, scale_lb=1e-8,
+            limit=cfg.network.get("max_loc", None)).to(device),
     )
 
     policy_module = ProbabilisticActor(
