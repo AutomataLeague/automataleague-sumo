@@ -180,13 +180,17 @@ def test_reward_components_sum_to_the_reported_reward(env):
 
 
 def test_cross_robot_matchup_fails_loudly():
-    """action_scale, observation_dim and action_dim are all derived from side A's
-    robot alone. A second robot with a different action scale or joint count would
-    silently produce a wrong-scale duel rather than an error, so a mismatched pair
-    must be rejected up front instead of allowed to run quietly wrong."""
+    """A duel is one robot against the same robot, by design: a league only measures
+    the algorithm if both sides run the same hardware. It is also load-bearing, since
+    action_scale, observation_dim and action_dim all come from side A's robot, so a
+    mismatched pair would silently produce a wrong-scale duel rather than an error.
+
+    Matched on the robot names rather than on the prose, so rewording the message
+    cannot break the test and a genuine regression still does.
+    """
     g1 = get_robot("g1")
     other = dataclasses.replace(g1, name="g1-clone")
-    with pytest.raises(NotImplementedError, match="both sides share a robot"):
+    with pytest.raises(NotImplementedError, match=r"'g1'.*'g1-clone'"):
         SumoEnvCPU("g1", opponent_robot=other)
 
 
