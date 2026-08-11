@@ -168,8 +168,13 @@ around the *home* pose, so one number cannot serve a whole robot: at a uniform 0
 elbows could never get within 45° of straight, and the arms simply hung. Use
 `tools/measure_reach.py` and `RobotSpec.joint_scale` for per-joint multipliers.
 
-Cross-robot matchups (a different robot on each side) are not supported yet; both backends
-raise `NotImplementedError` when the two sides differ.
+**Cross-robot matchups are on the roadmap, not done.** Both backends raise
+`NotImplementedError` when the two sides differ, deliberately: `action_scale` and the
+observation width are currently derived from side A, so a mixed duel would run at the wrong
+scale and quietly produce a meaningless result. The scene layer already composes two
+different robots; what remains is per-side plumbing, a batch layout that does not assume one
+observation width, and two policies instead of one. Tracked in
+[#1](https://github.com/AutomataLeague/automataleague-sumo/issues/1).
 
 ## Adding a custom reward
 
@@ -202,6 +207,17 @@ looked like progress.
 MUJOCO_GL=egl uv run pytest              # CPU suite
 MUJOCO_GL=egl uv run pytest -m gpu       # + CUDA and mujoco-warp
 ```
+
+## Roadmap
+
+* **Cross-robot matchups** — two different robots in the same duel
+  ([#1](https://github.com/AutomataLeague/automataleague-sumo/issues/1)). The largest gap
+  between what this repo promises and what it does.
+* **An Elo leaderboard** over the round-robin results, so tournaments become comparable
+  across runs rather than only within one field.
+* **Opponent posture in the observation.** A policy currently sees only 10 numbers about
+  its opponent: relative position, relative velocity, heading and one contact flag. Nothing
+  about its joint state or how it is leaning.
 
 ## Licence
 
