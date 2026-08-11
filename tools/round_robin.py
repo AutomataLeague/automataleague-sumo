@@ -28,8 +28,9 @@ import os
 
 import numpy as np
 import torch
-from omegaconf import OmegaConf
 
+from automataleague_sumo.envs.registry import get_env_spec
+from automataleague_sumo.envs.sumo.config import RewardConfig, TerminationConfig
 from automataleague_sumo.envs.sumo.observation import observation_dim
 from automataleague_sumo.envs.sumo.termination import R_LOSS, R_WIN
 from automataleague_sumo.policy import check_policy, load_policy
@@ -48,6 +49,14 @@ def parse_args():
                    help="subsample evenly to this many, since the cost is quadratic")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--env", default=None,
+                   help="arena to hold the tournament in (default: whatever the "
+                        "entrants declare, which must agree)")
+    p.add_argument("--nconmax", type=int, default=160,
+                   help="per-world contact buffer. MuJoCo-Warp DROPS contacts "
+                        "past this instead of raising, which reads as two robots "
+                        "passing through each other")
+    p.add_argument("--njmax", type=int, default=600)
     return p.parse_args()
 
 
@@ -145,34 +154,46 @@ def main():
 
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
-    first = torch.load(paths[0], map_location="cpu", weights_only=False)
-    cfg = OmegaConf.create(first["config"])
 
-    from automataleague_sumo.envs.sumo.sumo_warp import SumoEnvWarp
-    from automataleague_sumo.training.env import configs_from_cfg
-
-    sumo_cfg, rc, tc = configs_from_cfg(cfg)
-    env = SumoEnvWarp(robot=cfg.env.robot, num_envs=args.duels, device=args.device,
-                      cfg=sumo_cfg, reward_cfg=rc, term_cfg=tc,
-                      nconmax=int(cfg.env.nconmax), njmax=int(cfg.env.njmax))
-
-    robot = get_robot(cfg.env.robot)
-    # Loaded through the evaluation contract rather than by rebuilding this repo's
-    # PPO actor, so anything satisfying automataleague_sumo.policy can enter a
-    # tournament — a different algorithm, a different network, another repo
-    # entirely. Each artifact still carries its own config, so two checkpoints
-    # that differ in ways that change behaviour (network.max_loc is one) are each
-    # reconstructed as they were trained.
+    # Competitors are loaded FIRST, and the arena is built from the registry
+    # afterwards. It used to be the other way round: the env came from
+    # `paths[0]["config"]`, the first entrant's hydra config, which meant a
+    # competitor defined the venue and anything that was not a training
+    # checkpoint — a scripted baseline, an artifact from another repo — crashed
+    # with KeyError: 'config'. A league fixes the ring and lets anyone enter it.
     policies, names = [], []
     for path in paths:
         policy = load_policy(path, device)
-        # Validate BEFORE the tournament, not after. A wrong-width, non-finite,
-        # non-deterministic or batch-coupled policy produces a plausible-looking
-        # result rather than an error, and finding that out costs the whole run.
-        check_policy(policy, obs_dim=observation_dim(robot),
-                     act_dim=robot.action_dim, device=device)
         policies.append(policy)
         names.append(given.get(path) or policy.info.label)
+
+    robots = {p.info.robot for p in policies}
+    if len(robots) > 1:
+        raise SystemExit(
+            f"A duel is one robot against the same robot, so a tournament is "
+            f"per robot. Got {sorted(robots)}. See the same-robot rule in the "
+            f"README.")
+    robot_name = robots.pop()
+    envs = {p.info.env_id for p in policies}
+    if len(envs) > 1:
+        raise SystemExit(f"Entrants disagree about the environment: {sorted(envs)}")
+    env_id = args.env or envs.pop()
+
+    from automataleague_sumo.envs.sumo.sumo_warp import SumoEnvWarp
+
+    robot = get_robot(robot_name)
+    sumo_cfg = get_env_spec(env_id).config()
+    rc, tc = RewardConfig(), TerminationConfig()
+    env = SumoEnvWarp(robot=robot_name, num_envs=args.duels, device=args.device,
+                      cfg=sumo_cfg, reward_cfg=rc, term_cfg=tc,
+                      nconmax=args.nconmax, njmax=args.njmax)
+
+    # Validate BEFORE the tournament, not after. A wrong-width, non-finite,
+    # non-deterministic or batch-coupled policy produces a plausible-looking
+    # result rather than an error, and finding that out costs the whole run.
+    for policy in policies:
+        check_policy(policy, obs_dim=observation_dim(robot),
+                     act_dim=robot.action_dim, device=device)
 
     k = len(policies)
     wins = np.zeros((k, k))          # wins[i][j] = duels i won against j

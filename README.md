@@ -169,6 +169,18 @@ opponent's observation while looking entirely healthy.
 Training code for other algorithms does not belong here. This repo ships PPO as the
 reference; bring your own and register a loader.
 
+Two hand-written baselines prove the contract admits a policy this repo did not train, and
+give a tournament a fixed floor to be read against:
+
+```bash
+uv run python tools/make_baseline.py still -o baselines/still.pt
+MUJOCO_GL=egl uv run python tools/round_robin.py baselines/still.pt checkpoints/sumo1/*.pt
+```
+
+They have no weights, no torchrl and no hydra config. `still` does nothing; `lean` leans
+toward the opponent and is **worse than doing nothing** (2.5% against a field where `still`
+scored 22.3%), which is a useful reminder that a plausible idea needs measuring.
+
 `tools/` also holds the preflight checks (`reward_balance.py`, `baselines.py`,
 `warp_smoke.py`), the capability measurements (`measure_reach.py`,
 `policy_saturation.py`), and `push_test.py`. Each one exists because it caught a real

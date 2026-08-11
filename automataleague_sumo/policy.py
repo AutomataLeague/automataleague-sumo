@@ -103,10 +103,14 @@ def load_policy(path: str, device: torch.device | str = "cpu") -> Policy:
     state = torch.load(path, map_location="cpu", weights_only=False)
     fmt = state.get("format", "ppo-torchrl") if isinstance(state, dict) else "ppo-torchrl"
     if fmt not in _LOADERS:
-        # Imported here, not at module scope: the PPO loader needs torchrl, which
-        # is an optional extra, and this module must import without it.
+        # Imported here, not at module scope. The PPO loader needs torchrl, which
+        # is an optional extra, and this module must import without it; the
+        # built-in formats should still work without the caller knowing to import
+        # anything.
         if fmt == "ppo-torchrl":
             from automataleague_sumo.training import policy_ppo  # noqa: F401
+        elif fmt == "scripted":
+            from automataleague_sumo import scripted  # noqa: F401
         if fmt not in _LOADERS:
             raise ValueError(
                 f"No loader registered for policy format {fmt!r}. Known: "
