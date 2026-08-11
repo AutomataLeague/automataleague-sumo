@@ -105,6 +105,10 @@ def _add_dohyo(spec: mujoco.MjSpec, cfg: SumoConfig) -> None:
     from the near-vertical top camera. Geom ``rgba`` still wins for color; the
     material only supplies the low-gloss shading parameters.
     """
+    # Every size is a full 3-vector, including the unused third element on a
+    # cylinder. MjSpec before 3.11 rejects a short one outright ("size should be
+    # a list/array of size 3"), so a 2-element size makes the package unusable on
+    # the mujoco floor its own pyproject declares.
     h = cfg.platform_height
     mat = spec.add_material()
     mat.name = "clay"
@@ -113,17 +117,18 @@ def _add_dohyo(spec: mujoco.MjSpec, cfg: SumoConfig) -> None:
     mat.reflectance = 0.0
     spec.worldbody.add_geom(
         name="dohyo", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-        size=[cfg.ring_radius, h / 2.0], pos=[0.0, 0.0, h / 2.0],
+        size=[cfg.ring_radius, h / 2.0, 0.0], pos=[0.0, 0.0, h / 2.0],
         rgba=_CLAY, material="clay",
     )
     spec.worldbody.add_geom(
         name="ring_band", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-        size=[cfg.ring_radius, _PAINT_HALF_Z], pos=[0.0, 0.0, h + _PAINT_HALF_Z],
+        size=[cfg.ring_radius, _PAINT_HALF_Z, 0.0],
+        pos=[0.0, 0.0, h + _PAINT_HALF_Z],
         rgba=_BAND, material="clay", contype=0, conaffinity=0,
     )
     spec.worldbody.add_geom(
         name="ring_inner", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-        size=[cfg.ring_radius - _BAND_WIDTH, _PAINT_HALF_Z],
+        size=[cfg.ring_radius - _BAND_WIDTH, _PAINT_HALF_Z, 0.0],
         pos=[0.0, 0.0, h + 3 * _PAINT_HALF_Z], rgba=_CLAY, material="clay",
         contype=0, conaffinity=0,
     )

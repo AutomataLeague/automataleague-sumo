@@ -116,8 +116,8 @@ MUJOCO_GL=egl uv run python examples/ppo_sumo.py run_name=sumo1 \
 * Override anything via Hydra, e.g. `collector.total_frames=20_000_000 env.num_envs=4096`.
 * Checkpoints are written to `checkpoints/<run_name>/`, alongside a `metrics.jsonl` with
   every batch. Weights and Biases is on by default; `logger.backend=""` disables it.
-* On a DGX Spark (GB10) at 2048 duels this runs about 39k policy rows/s, so **1B frames is
-  roughly 7.5 hours**.
+* The shipped policy took **1B frames** of self-play. Frame counts are the reproducible
+  quantity here; wall-clock depends entirely on your GPU.
 
 > **[training-recipe.md](training-recipe.md)** is the full walkthrough: how the shipped
 > policy was actually trained, the check to run at each stage before spending the next

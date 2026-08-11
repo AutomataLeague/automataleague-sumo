@@ -25,7 +25,7 @@ train = [
     "tqdm>=4.66",
     "moviepy>=1.0",
 ]
-# GPU-parallel physics (Phase C) — source pinned per machine on the GPU box.
+# GPU-parallel physics. Resolves from PyPI; needs a CUDA device at runtime.
 gpu = ["mujoco-warp"]
 
 # Dev tooling lives in [dependency-groups] (PEP 735), not optional-dependencies,
@@ -52,5 +52,5 @@ select = ["E", "F", "I", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "gpu: requires a CUDA device + mujoco-warp (run on the spark/jetson)",
+    "gpu: requires a CUDA device and mujoco-warp",
 ]

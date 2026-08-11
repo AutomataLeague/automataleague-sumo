@@ -1,4 +1,5 @@
-# PPO on sumo-1. Defaults are tuned for a DGX Spark (GB10, 122 GB unified memory).
+# PPO on sumo-1. Defaults suit a single modern CUDA GPU; lower env.num_envs first
+# if you run out of memory.
 #
 # A yaml value of `null` under env.arena / env.reward_weights / env.termination
 # means "keep whatever the registry chose", so a run can change one knob without

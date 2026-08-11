@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import numpy as np
-import torch
-from torchrl.envs import Compose, ExplorationType, TransformedEnv, set_exploration_type
+from torchrl.envs import Compose, TransformedEnv
 from torchrl.envs.transforms import InitTracker, RewardSum, StepCounter
 
 from automataleague_sumo.envs.registry import get_env_spec
@@ -114,39 +112,3 @@ def make_environment(cfg):
     return train_env, eval_env
 
 
-def rollout_video(policy, cfg, max_steps=None, policy_device="cuda",
-                  render_size=(720, 1280), camera="corner"):
-    """Roll the deterministic policy on one CPU duel and return frames ``[T,H,W,3]``.
-
-    Both sides are driven by the same policy so the clip shows the actual duel the
-    self-play batch is training on. Against a passive dummy side B is held at zero,
-    matching what the Warp env does.
-    """
-    from automataleague_sumo.envs.sumo.sumo_cpu import SumoEnvCPU
-
-    sumo_cfg, rc, tc = configs_from_cfg(cfg)
-    env = SumoEnvCPU(robot=cfg.env.robot, cfg=sumo_cfg, reward_cfg=rc, term_cfg=tc,
-                     render_size=render_size)
-    both_sides = sumo_cfg.opponent == "self"
-    steps = int(max_steps or tc.max_episode_steps)
-
-    obs_a, obs_b = env.reset()
-    frames = []
-    with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-        for _ in range(steps):
-            stacked = np.stack([obs_a, obs_b]) if both_sides else obs_a[None]
-            act = policy(_obs_td(stacked, policy_device))["action"].cpu().numpy()
-            act_a = act[0]
-            act_b = act[1] if both_sides else np.zeros_like(act_a)
-            (obs_a, obs_b), _, term, trunc, _ = env.step(act_a, act_b)
-            frames.append(env.render(camera=camera))
-            if term or trunc:
-                break
-    return np.stack(frames)
-
-
-def _obs_td(obs, device):
-    from tensordict import TensorDict
-
-    t = torch.as_tensor(obs, dtype=torch.float32, device=device)
-    return TensorDict({"observation": t}, batch_size=[t.shape[0]])
