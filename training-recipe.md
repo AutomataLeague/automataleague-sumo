@@ -32,8 +32,13 @@ frames, which reads exactly like "needs more compute". The vendored MJX model wa
 stripped for locomotion: **12 of 30 bodies had no collision geom at all**,
 including both shoulders and both forearms, and **56% of all robot-to-robot
 contact was missing**. Both policies had been exploiting the same holes
-symmetrically, so the stalemate looked stable and earned. Audit a vendored asset
-against *your* task, not the one it shipped for.
+symmetrically, so the stalemate looked stable and earned.
+
+The method is cheap and worth copying: replay one trained policy's exact actions
+through both the stock and the corrected model and count contacts. Same motion,
+two models, so the difference is contact that was *missing* rather than contact
+caused by the change. Ours went 1,877 → 4,225. Audit a vendored asset against
+*your* task, not the one it shipped for.
 
 **3. A policy that never lost a duel had no balance at all.** It held a stance
 for the full 750-step episode, and a gentle 0.5 m/s shove put it down in **6 of 6
@@ -48,7 +53,11 @@ to use them. In fact `action_scale` is a symmetric window around the **home**
 pose, and the G1's home pose already bends the elbow 1.28 rad, so at a uniform
 0.5 the elbow could never get within 45° of straight. The policy was not
 declining to reach; reaching was not in the action space. Per-joint scaling
-raised measured arm reach from 0.42 m to 0.59 m and the grappling appeared.
+(`RobotSpec.joint_scale`) raised measured arm reach from 0.42 m to 0.59 m.
+
+The generalizable check: compare your action window against the **home pose**,
+not against the joint limits. Limits never bound anywhere in our usable range, so
+they told us nothing, while the home pose silently cost us half the arm.
 
 **5. Twice, what looked like a failing policy was a policy correctly obeying a
 reward we had mis-specified.** Surviving at the spawn radius scored **−0.130 per
@@ -72,9 +81,15 @@ source rather than the symptom.
 not the best one.** An earlier checkpoint beat the final one **four separate
 times**, once by 58.3% over a thousand duels. And 590M frames beyond 1B bought a
 57.4% head-to-head edge over the policy they started from, an order of magnitude
-less than a single collision fix delivered. Each warm restart also knocked the
-policy down to 28.6% against the field for ~200M frames, because it restarts the
-learning-rate anneal at full strength on an already-converged policy.
+less than a single collision fix delivered. Both warm restarts also knocked the
+policy down before it recovered, to 41.6% and 28.6% against the field, taking
+~200M frames each time to climb back.
+
+*Not yet established:* we suspect the restart itself, because `init_checkpoint`
+restarts the learning-rate anneal at full strength on an already-converged
+policy. A control run at a constant reduced rate is testing that and has not
+finished, so treat the mechanism as a hypothesis and the two knock-downs as the
+only measured facts here.
 
 **The common thread:** in nearly every case above, the instrument was silent. A
 test that passed whatever the code did, a win rate that was a constant by
@@ -179,9 +194,11 @@ MUJOCO_GL=egl uv run python tools/render_progression.py checkpoints/sumo1/ppo_ev
 
 ### Optional: continue past 1B
 
-There is headroom, but a plain warm start restarts the learning-rate anneal at
-full strength on an already-converged policy and knocks it down to 28.6% against
-the field for ~200M frames. Continue at a constant, reduced rate:
+There is headroom, but both of our warm restarts knocked the policy down first,
+to 41.6% and 28.6% against the field, costing ~200M frames each to recover. The
+suspected cause is that `init_checkpoint` restarts the learning-rate anneal at
+full strength on an already-converged policy; that is untested, so the command
+below is the control, not a proven recipe. Continue at a constant, reduced rate:
 
 ```bash
 MUJOCO_GL=egl uv run python tools/policy_saturation.py checkpoints/sumo1/<best>.pt
